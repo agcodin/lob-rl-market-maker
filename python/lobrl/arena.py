@@ -76,7 +76,8 @@ class ArenaConfig:
     informed_frac: float = 0.0
     fundamental_vol: float = 0.0
     aux_coef: float = 2.0        # weight on the auxiliary supervised loss
-    aux_target: str = "gap"      # "gap" (latent fundamental) or "fwd" (return)
+    aux_target: str = "gap"
+    gap_predictor: str | None = None      # "gap" (latent fundamental) or "fwd" (return)
     hidden: int = 128
     seed: int = 0
 
@@ -176,6 +177,7 @@ def env_config(cfg: ArenaConfig, n: int) -> MultiEnvConfig:
                           min_quote_size=cfg.min_quote_size,
                           max_quote_size=cfg.max_quote_size,
                           flow_features=cfg.flow_features,
+                          gap_predictor=cfg.gap_predictor,
                           flow=FlowConfig(informed_frac=cfg.informed_frac,
                                           fundamental_vol=cfg.fundamental_vol))
 
@@ -536,6 +538,8 @@ def main():
     ap.add_argument("--patience", type=int, default=8,
                     help="failed generations before reverting the learner to best.pt")
     ap.add_argument("--aux-target", choices=["gap", "fwd"], default="gap")
+    ap.add_argument("--gap-predictor", default=None,
+                    help="path to a trained fundamental-gap estimator")
     ap.add_argument("--aux-coef", type=float, default=2.0,
                     help="weight on the auxiliary forward-price prediction loss")
     ap.add_argument("--flow-features", action="store_true",
@@ -561,7 +565,7 @@ def main():
                       flow_features=args.flow_features,
                       informed_frac=args.informed_frac,
                       fundamental_vol=args.fundamental_vol, aux_coef=args.aux_coef,
-                      aux_target=args.aux_target)
+                      aux_target=args.aux_target, gap_predictor=args.gap_predictor)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))

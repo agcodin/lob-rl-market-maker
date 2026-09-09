@@ -37,6 +37,10 @@ class MultiEnvConfig:
     # their sign leans with book imbalance. Without these the policy sees the
     # book but never the tape, so that structure is unobservable to it.
     flow_features: bool = False
+    # Path to a supervised fundamental-gap estimator. Its output is appended to
+    # the observation as one extra feature, so the policy only has to learn a
+    # simple monotone response instead of extracting the signal itself.
+    gap_predictor: str | None = None
     flow_fast: float = 0.15      # EWMA weight, fast
     flow_slow: float = 0.03      # EWMA weight, slow
     variable_size: bool = False
@@ -80,8 +84,13 @@ class MultiAgentMarketMakingEnv:
         self._ask_vol = np.zeros(K, dtype=np.int64)
 
         self.n_flow = 4 if self.cfg.flow_features else 0
-        self.observation_space = spaces.Box(-np.inf, np.inf,
-                                            shape=(4 * K + 8 + self.n_flow,), dtype=np.float32)
+        self._gap_net, self._gap_cols, self._gap_sd = None, None, 1.0
+        if self.cfg.gap_predictor:
+            from lobrl.gap import load as load_gap  # noqa: PLC0415
+            self._gap_net, self._gap_cols, self._gap_sd = load_gap(self.cfg.gap_predictor)
+        self.n_pred = 1 if self._gap_net is not None else 0
+        self.observation_space = spaces.Box(
+            -np.inf, np.inf, shape=(4 * K + 8 + self.n_flow + self.n_pred,), dtype=np.float32)
         self.act_dim = 4 if self.cfg.variable_size else 2
         self.action_space = spaces.Box(-1.0, 1.0, shape=(self.act_dim,), dtype=np.float32)
         self.n_agents = n
@@ -332,10 +341,12 @@ class MultiAgentMarketMakingEnv:
                 np.tanh(self.f_size / 60.0),
             )
 
-        out = np.empty((self.n_agents, 4 * cfg.levels + 8 + self.n_flow), dtype=np.float32)
+        out = np.empty((self.n_agents, 4 * cfg.levels + 8 + self.n_flow + self.n_pred),
+                       dtype=np.float32)
+        width = 4 * cfg.levels + 8 + self.n_flow
         for i in range(self.n_agents):
             unrealized = self.cash[i] + self.inventory[i] * mid
-            out[i] = np.concatenate([
+            out[i, :width] = np.concatenate([
                 shared,
                 [
                     imbalance,
@@ -349,7 +360,17 @@ class MultiAgentMarketMakingEnv:
                 ],
                 flow,
             ])
+        if self.n_pred:
+            out[:, -1] = self._predict_gap(out[0])
         return out
+
+    def _predict_gap(self, row: np.ndarray) -> float:
+        """One market-wide estimate per step, shared by every agent."""
+        import torch
+
+        x = torch.as_tensor(row[self._gap_cols][None, :], dtype=torch.float32)
+        with torch.no_grad():
+            return float(np.tanh(float(self._gap_net(x)[0]) / (2.0 * self._gap_sd)))
 
     def _queue_ratio(self, oid: int) -> float:
         if oid <= 0 or not self.book.is_live(oid):
