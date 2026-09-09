@@ -244,13 +244,14 @@ def test_flow_features_extend_the_observation_and_stay_bounded():
     plain = MultiAgentMarketMakingEnv(MultiEnvConfig(n_agents=2), seed=0)
     tape = MultiAgentMarketMakingEnv(
         MultiEnvConfig(n_agents=2, max_steps=400, flow_features=True), seed=0)
-    assert tape.observation_space.shape[0] == plain.observation_space.shape[0] + 4
+    n_tape = len(MultiEnvConfig().flow_alphas) + 2      # timescales + rate + size
+    assert tape.observation_space.shape[0] == plain.observation_space.shape[0] + n_tape
 
     obs, _ = tape.reset(seed=0)
     seen = []
     for _ in range(400):
         obs, *_ = tape.step(np.zeros((2, 2), np.float32))
-        seen.append(obs[0, -4:].copy())
+        seen.append(obs[0, -n_tape:].copy())
     seen = np.array(seen)
     assert np.all(np.abs(seen) <= 1.0)          # squashed
     assert seen.std(axis=0).max() > 1e-3        # and actually varying

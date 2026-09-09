@@ -17,9 +17,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from lobrl.gap import MARKET_COLS, GapNet
+
 # Market-visible slice of the observation: book levels, imbalance, spread,
 # volatility and the tape. Deliberately excludes the agent-private tail.
-MARKET_COLS = list(range(0, 21)) + [22, 23] + list(range(28, 32))
 
 
 def collect(steps: int, seed: int, informed_frac: float, fundamental_vol: float):
@@ -38,17 +39,6 @@ def collect(steps: int, seed: int, informed_frac: float, fundamental_vol: float)
     return np.array(X, np.float32), np.array(y, np.float32)
 
 
-class GapNet(nn.Module):
-    def __init__(self, dim: int, hidden: int = 96):
-        super().__init__()
-        self.mean = nn.Parameter(torch.zeros(dim), requires_grad=False)
-        self.std = nn.Parameter(torch.ones(dim), requires_grad=False)
-        self.net = nn.Sequential(nn.Linear(dim, hidden), nn.ReLU(),
-                                 nn.Linear(hidden, hidden), nn.ReLU(),
-                                 nn.Linear(hidden, 1))
-
-    def forward(self, x):
-        return self.net((x - self.mean) / self.std).squeeze(-1)
 
 
 def main():
