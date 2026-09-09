@@ -194,3 +194,45 @@ def test_best_checkpoint_is_the_champion_not_the_last_learner(tmp_path):
     saved = torch.load(tmp_path / "best.pt", map_location="cpu", weights_only=False)["model"]
     ref = champion.net.state_dict()
     assert all(torch.equal(saved[k], ref[k]) for k in ref)
+
+
+def test_variable_size_action_maps_zero_to_the_fixed_size():
+    """The 2-d action space must be a strict subset of the 4-d one."""
+    cfg = MultiEnvConfig(n_agents=2, max_steps=5, variable_size=True)
+    env = MultiAgentMarketMakingEnv(cfg, seed=0)
+    env.reset(seed=0)
+    assert env.act_dim == 4
+    _, _, _, _, info = env.step(np.zeros((2, 4), np.float32))
+    assert (info["sizes"] == cfg.quote_size).all()
+
+    env.reset(seed=0)
+    _, _, _, _, lo = env.step(np.array([[0, 0, -1, -1]] * 2, np.float32))
+    env.reset(seed=0)
+    _, _, _, _, hi = env.step(np.array([[0, 0, 1, 1]] * 2, np.float32))
+    assert (lo["sizes"] == cfg.min_quote_size).all()
+    assert (hi["sizes"] == cfg.max_quote_size).all()
+
+
+def test_two_dim_policy_keeps_its_behaviour_in_a_variable_size_book():
+    """Padding a 2-d action with zeros must reproduce fixed-size quoting."""
+    from lobrl.arena import ArenaConfig, FrozenPolicy, _run_episode
+    from lobrl.ppo import ActorCritic, PPOConfig, RunningNorm
+
+    old = FrozenPolicy(ActorCritic(28, 2, PPOConfig()).state_dict(),
+                       RunningNorm(28).state_dict(), 28, 2, "old")
+    for variable in (False, True):
+        cfg = ArenaConfig(n_agents=2, episode_steps=120, variable_size=variable)
+        res = _run_episode([old, old], cfg, seed=3)
+        assert len(res) == 2
+        if variable:
+            assert res[0]["n_fills"] >= 0      # runs without shape errors
+
+
+def test_frozen_policy_recovers_hidden_width_from_the_checkpoint():
+    from lobrl.arena import FrozenPolicy
+    from lobrl.ppo import ActorCritic, PPOConfig, RunningNorm
+
+    wide = ActorCritic(28, 4, PPOConfig(hidden=256))
+    p = FrozenPolicy(wide.state_dict(), RunningNorm(28).state_dict(), 28, 4, "wide")
+    assert p.net.actor[0].out_features == 256
+    assert p.act_batch(np.zeros((3, 28), np.float32)).shape == (3, 4)

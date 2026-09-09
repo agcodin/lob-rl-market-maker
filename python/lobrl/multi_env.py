@@ -27,6 +27,14 @@ class MultiEnvConfig:
     max_steps: int = 1_000
     init_mid: int = 10_000
     quote_size: int = 20
+    # When variable_size is on the action grows to
+    # [delta_bid, delta_ask, size_bid, size_ask] and each side's size is mapped
+    # onto [min_quote_size, max_quote_size]. A policy that outputs 0 for both
+    # size components quotes exactly `quote_size`, so the 2-d action space is a
+    # strict subset of the 4-d one and old policies stay comparable.
+    variable_size: bool = False
+    min_quote_size: int = 2
+    max_quote_size: int = 40
     max_inventory: int = 200
     min_offset: float = 0.5
     max_offset: float = 10.0
@@ -65,7 +73,8 @@ class MultiAgentMarketMakingEnv:
         self._ask_vol = np.zeros(K, dtype=np.int64)
 
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(4 * K + 8,), dtype=np.float32)
-        self.action_space = spaces.Box(-1.0, 1.0, shape=(2,), dtype=np.float32)
+        self.act_dim = 4 if self.cfg.variable_size else 2
+        self.action_space = spaces.Box(-1.0, 1.0, shape=(self.act_dim,), dtype=np.float32)
         self.n_agents = n
 
         self._events = None
@@ -111,9 +120,11 @@ class MultiAgentMarketMakingEnv:
 
     def step(self, actions):
         cfg = self.cfg
-        a = np.clip(np.asarray(actions, dtype=np.float64).reshape(self.n_agents, 2), -1.0, 1.0)
+        a = np.clip(np.asarray(actions, dtype=np.float64).reshape(self.n_agents, self.act_dim),
+                    -1.0, 1.0)
         lo, hi = cfg.min_offset, cfg.max_offset
-        offsets = lo + (a + 1.0) * 0.5 * (hi - lo)
+        offsets = lo + (a[:, :2] + 1.0) * 0.5 * (hi - lo)
+        sizes = self._sizes(a)
 
         self._cancel_all()
         mid = float(self.book.mid())          # one snapshot price for every agent
@@ -121,7 +132,7 @@ class MultiAgentMarketMakingEnv:
         if cfg.randomize_order:
             self.rng.shuffle(order)
         for i in order:
-            self._place(int(i), mid, offsets[i, 0], offsets[i, 1])
+            self._place(int(i), mid, offsets[i, 0], offsets[i, 1], sizes[i, 0], sizes[i, 1])
 
         self.flow.step(self.book)
         d_inv = self._apply_fills()
@@ -142,6 +153,7 @@ class MultiAgentMarketMakingEnv:
         truncated = self.step_count >= cfg.max_steps
         info = self._info()
         info["offsets"] = offsets
+        info["sizes"] = sizes
         info["d_pnl"] = d_pnl
         return self._obs(), rewards.astype(np.float64), False, truncated, info
 
@@ -156,10 +168,27 @@ class MultiAgentMarketMakingEnv:
         self.quote_bid_px[:] = -1
         self.quote_ask_px[:] = -1
 
-    def _place(self, i: int, mid: float, d_bid: float, d_ask: float) -> None:
+    def _sizes(self, a: np.ndarray) -> np.ndarray:
+        """Map the size half of the action onto share counts.
+
+        Action 0 maps to `quote_size` exactly, so a 2-d policy padded with zeros
+        reproduces the fixed-size behaviour it was trained with.
+        """
+        cfg = self.cfg
+        if not cfg.variable_size:
+            return np.full((self.n_agents, 2), cfg.quote_size, dtype=np.int64)
+        u = a[:, 2:4]
+        below = cfg.quote_size - cfg.min_quote_size
+        above = cfg.max_quote_size - cfg.quote_size
+        scaled = np.where(u >= 0, cfg.quote_size + u * above, cfg.quote_size + u * below)
+        return np.clip(np.rint(scaled), cfg.min_quote_size, cfg.max_quote_size).astype(np.int64)
+
+    def _place(self, i: int, mid: float, d_bid: float, d_ask: float,
+               sz_bid: int = 0, sz_ask: int = 0) -> None:
         cfg = self.cfg
         owner = OWNER_BASE + i
-        size = cfg.quote_size
+        sz_bid = int(sz_bid) or cfg.quote_size
+        sz_ask = int(sz_ask) or cfg.quote_size
         # The clamp reads the live book, so a maker can never cross a rival's
         # resting quote -- every agent order is passive by construction.
         if self.inventory[i] < cfg.max_inventory:
@@ -168,7 +197,7 @@ class MultiAgentMarketMakingEnv:
             if ba >= 0:
                 px = min(px, ba - 1)
             if px > 0:
-                oid = self.book.limit(Side.BID, px, size, owner)
+                oid = self.book.limit(Side.BID, px, sz_bid, owner)
                 if oid > 0:
                     self.bid_id[i] = oid
                     self.quote_bid_px[i] = px
@@ -177,7 +206,7 @@ class MultiAgentMarketMakingEnv:
             bb = self.book.best_bid()
             if bb >= 0:
                 px = max(px, bb + 1)
-            oid = self.book.limit(Side.ASK, px, size, owner)
+            oid = self.book.limit(Side.ASK, px, sz_ask, owner)
             if oid > 0:
                 self.ask_id[i] = oid
                 self.quote_ask_px[i] = px

@@ -65,6 +65,11 @@ class ArenaConfig:
     # Measured: at 5e-3 the candidate ran |inv| ~16 and never beat the incumbent;
     # at 2e-2 it holds ~12 and beats it by +5.6 Sharpe (t=2.9, 48 paired episodes).
     inventory_penalty: float = 2e-2
+    # Richer action space: the learner also chooses how many shares to show.
+    variable_size: bool = False
+    min_quote_size: int = 2
+    max_quote_size: int = 40
+    hidden: int = 128
     seed: int = 0
 
 
@@ -72,7 +77,8 @@ class FrozenPolicy:
     """A snapshot that acts but never learns."""
 
     def __init__(self, net_state, norm_state, obs_dim, act_dim, label):
-        self.net = ActorCritic(obs_dim, act_dim, PPOConfig())
+        hidden = net_state["actor.0.weight"].shape[0]
+        self.net = ActorCritic(obs_dim, act_dim, PPOConfig(hidden=hidden))
         self.net.load_state_dict(net_state)
         self.net.eval()
         self.norm = RunningNorm(obs_dim)
@@ -95,6 +101,10 @@ class FrozenPolicy:
 
     def reset(self):
         pass
+
+    @property
+    def act_dim(self):
+        return self.net.log_std.numel()
 
     def act_batch(self, obs, deterministic=False):
         with torch.no_grad():
@@ -150,11 +160,17 @@ def head_to_head(a, b, cfg: ArenaConfig, seeds, labels=("candidate", "incumbent"
             for k, v in out.items()}
 
 
+def env_config(cfg: ArenaConfig, n: int) -> MultiEnvConfig:
+    return MultiEnvConfig(n_agents=n, max_steps=cfg.episode_steps,
+                          inventory_penalty=cfg.inventory_penalty,
+                          variable_size=cfg.variable_size,
+                          min_quote_size=cfg.min_quote_size,
+                          max_quote_size=cfg.max_quote_size)
+
+
 def _run_episode(policies, cfg: ArenaConfig, seed: int) -> list[dict]:
     n = len(policies)
-    env = MultiAgentMarketMakingEnv(
-        MultiEnvConfig(n_agents=n, max_steps=cfg.episode_steps,
-                       inventory_penalty=cfg.inventory_penalty), seed=seed)
+    env = MultiAgentMarketMakingEnv(env_config(cfg, n), seed=seed)
     obs, _ = env.reset(seed=seed)
     for p in policies:
         p.reset()
@@ -169,15 +185,20 @@ def _run_episode(policies, cfg: ArenaConfig, seed: int) -> list[dict]:
     mids = []
     t = 0
     while True:
-        acts = np.zeros((n, 2), np.float32)
+        # A 2-d policy writes into the first two columns and leaves the size
+        # columns at 0, which the env maps to exactly `quote_size` -- so old
+        # policies keep their old behaviour in a variable-size book.
+        acts = np.zeros((n, env.act_dim), np.float32)
         for seats in groups.values():
             p = policies[seats[0]]
             if isinstance(p, _Heuristic):
                 for i in seats:
                     views[i].sync(i)
-                    acts[i] = p.act_batch(obs[i:i + 1], views[i])[0]
+                    a = p.act_batch(obs[i:i + 1], views[i])[0]
+                    acts[i, :len(a)] = a
             else:
-                acts[seats] = p.act_batch(obs[seats], deterministic=True)
+                a = p.act_batch(obs[seats], deterministic=True)
+                acts[seats, :a.shape[1]] = a
         obs, _, term, trunc, info = env.step(acts)
         eq[t] = info["equity"]
         inv[t] = info["inventory"]
@@ -206,11 +227,11 @@ class Arena:
         self.rng = np.random.default_rng(cfg.seed)
         torch.manual_seed(cfg.seed)
 
-        probe = MultiAgentMarketMakingEnv(MultiEnvConfig(n_agents=cfg.n_agents), seed=cfg.seed)
+        probe = MultiAgentMarketMakingEnv(env_config(cfg, cfg.n_agents), seed=cfg.seed)
         self.obs_dim = probe.observation_space.shape[0]
         self.act_dim = probe.action_space.shape[0]
 
-        self.trainer = PPOTrainer(self.obs_dim, self.act_dim, PPOConfig())
+        self.trainer = PPOTrainer(self.obs_dim, self.act_dim, PPOConfig(hidden=cfg.hidden))
         self.norm = RunningNorm(self.obs_dim)
         self.heuristics = make_heuristics()
         self.gen = 0
@@ -316,10 +337,7 @@ class Arena:
         L = cfg.learner_seats
         n = cfg.n_agents
         rollout = max(1, cfg.batch // L)
-        env = MultiAgentMarketMakingEnv(
-            MultiEnvConfig(n_agents=n, max_steps=cfg.episode_steps,
-                           inventory_penalty=cfg.inventory_penalty),
-            seed=int(self.rng.integers(1 << 30)))
+        env = MultiAgentMarketMakingEnv(env_config(cfg, n), seed=int(self.rng.integers(1 << 30)))
         obs, _ = env.reset(seed=int(self.rng.integers(1 << 30)))
 
         live = FrozenPolicy.from_live(self.trainer.net, self.norm, self.obs_dim,
@@ -338,13 +356,14 @@ class Arena:
                 nobs = self.norm(lobs)
                 with torch.no_grad():
                     a, logp, v = self.trainer.net.act(torch.as_tensor(nobs))
-                acts = np.zeros((n, 2), np.float32)
+                acts = np.zeros((n, env.act_dim), np.float32)
                 acts[:L] = np.clip(a.numpy(), -1, 1)
                 for j, opp in enumerate(opponents):
                     i = L + j
                     views[i].sync(i)
-                    acts[i] = (opp.act_batch(obs[i:i + 1], views[i])[0]
-                               if isinstance(opp, _Heuristic) else opp.act_batch(obs[i:i + 1])[0])
+                    oa = (opp.act_batch(obs[i:i + 1], views[i])[0]
+                          if isinstance(opp, _Heuristic) else opp.act_batch(obs[i:i + 1])[0])
+                    acts[i, :len(oa)] = oa
                 nxt, rew, term, trunc, info = env.step(acts)
                 buf.add(nobs, acts[:L], logp.numpy(), rew[:L], v.numpy(),
                         np.full(L, 1.0 if trunc else 0.0, np.float32))
@@ -352,6 +371,7 @@ class Arena:
                 obs = nxt
                 if trunc:
                     ep_stats.append({
+                        "size": float(info["sizes"][:L].mean()),
                         "ret": float(ep_ret.mean()),
                         "equity": float(info["equity"][:L].mean()),
                         "inv": float(np.abs(info["inventory"][:L]).mean()),
@@ -375,7 +395,7 @@ class Arena:
 
         recent = ep_stats[-10:]
         agg = {k: float(np.mean([e[k] for e in recent])) for k in
-               ("ret", "equity", "inv", "fills", "offset")} if recent else {}
+               ("ret", "equity", "inv", "fills", "offset", "size")} if recent else {}
         return {**agg, **{k: float(v) for k, v in stats.items()},
                 "episodes": len(ep_stats)}
 
@@ -499,6 +519,9 @@ def main():
                     help="what a candidate must beat the incumbent on")
     ap.add_argument("--patience", type=int, default=8,
                     help="failed generations before reverting the learner to best.pt")
+    ap.add_argument("--variable-size", action="store_true",
+                    help="let the policy choose quote size as well as price")
+    ap.add_argument("--hidden", type=int, default=128)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="runs/arena")
     args = ap.parse_args()
@@ -509,7 +532,8 @@ def main():
                       patience=args.patience, seed=args.seed,
                       promote_metric=args.promote_metric,
                       inventory_penalty=args.inventory_penalty,
-                      p_baseline=args.p_baseline)
+                      p_baseline=args.p_baseline,
+                      variable_size=args.variable_size, hidden=args.hidden)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
