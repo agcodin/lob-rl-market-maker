@@ -41,6 +41,16 @@ class FlowConfig:
     # Sign of aggressive flow leans with book imbalance (order-flow feedback).
     imbalance_bias: float = 0.35
 
+    # Informed flow (Glosten-Milgrom / Kyle). A latent fundamental value random
+    # walks; a fraction of takers observe it and trade toward it, dragging the
+    # mid with them. Those trades genuinely predict the next price move, so a
+    # market maker that cannot tell them from noise gets picked off -- which is
+    # what makes adverse selection a real adversary rather than a statistic.
+    # Zero keeps the original uninformed market exactly as it was.
+    informed_frac: float = 0.0
+    fundamental_vol: float = 0.0   # ticks of fundamental drift per step
+    informed_edge: float = 1.0     # ticks the fundamental must lead the mid by
+
     tick: int = 1
     dt: float = 1.0
 
@@ -50,6 +60,7 @@ class MarketFlow:
     cfg: FlowConfig = field(default_factory=FlowConfig)
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
     hawkes_state: float = 0.0
+    fundamental: float = 0.0
     _ref: int = 0
 
     # ---- setup ---------------------------------------------------------
@@ -58,6 +69,7 @@ class MarketFlow:
         """Fill a fresh book with a symmetric ladder so step 0 has two sides."""
         self._ref = int(mid_tick)
         self.hawkes_state = 0.0
+        self.fundamental = float(mid_tick)
         half = max(1, self.cfg.tick)
         for d in range(levels):
             qty = int(size * (1.0 + 0.15 * d))
@@ -69,7 +81,9 @@ class MarketFlow:
     def step(self, book) -> dict:
         cfg = self.cfg
         dt = cfg.dt
-        stats = {"limits": 0, "cancels": 0, "markets": 0, "market_volume": 0}
+        stats = {"limits": 0, "cancels": 0, "markets": 0, "market_volume": 0, "informed": 0}
+        if cfg.fundamental_vol > 0:
+            self.fundamental += float(self.rng.normal(0.0, cfg.fundamental_vol * np.sqrt(dt)))
         self._place_limits(book, dt, stats)
         self._cancel(book, dt, stats)
         self._aggress(book, dt, stats)
@@ -149,10 +163,19 @@ class MarketFlow:
         imb = (bid_vol - ask_vol) / total if total > 0 else 0.0
         # Positive imbalance (heavy bid) makes buy-side aggression more likely.
         p_buy = float(np.clip(0.5 + cfg.imbalance_bias * imb, 0.05, 0.95))
+        mid = book.mid()
         for _ in range(int(n)):
             u = self.rng.random()
             size = int(min(cfg.size_xmin * u ** (-1.0 / cfg.size_tail_index), cfg.size_cap))
-            side = Side.BID if self.rng.random() < p_buy else Side.ASK
+            gap = self.fundamental - mid
+            informed = (cfg.informed_frac > 0 and abs(gap) >= cfg.informed_edge
+                        and self.rng.random() < cfg.informed_frac)
+            if informed:
+                # Buys when the fundamental sits above the mid, and vice versa.
+                side = Side.BID if gap > 0 else Side.ASK
+                stats["informed"] += 1
+            else:
+                side = Side.BID if self.rng.random() < p_buy else Side.ASK
             filled = book.market(side, max(1, size), Owner.NOISE)
             stats["markets"] += 1
             stats["market_volume"] += int(filled)

@@ -236,3 +236,45 @@ def test_frozen_policy_recovers_hidden_width_from_the_checkpoint():
     p = FrozenPolicy(wide.state_dict(), RunningNorm(28).state_dict(), 28, 4, "wide")
     assert p.net.actor[0].out_features == 256
     assert p.act_batch(np.zeros((3, 28), np.float32)).shape == (3, 4)
+
+
+def test_flow_features_extend_the_observation_and_stay_bounded():
+    from lobrl.flow import FlowConfig
+
+    plain = MultiAgentMarketMakingEnv(MultiEnvConfig(n_agents=2), seed=0)
+    tape = MultiAgentMarketMakingEnv(
+        MultiEnvConfig(n_agents=2, max_steps=400, flow_features=True), seed=0)
+    assert tape.observation_space.shape[0] == plain.observation_space.shape[0] + 4
+
+    obs, _ = tape.reset(seed=0)
+    seen = []
+    for _ in range(400):
+        obs, *_ = tape.step(np.zeros((2, 2), np.float32))
+        seen.append(obs[0, -4:].copy())
+    seen = np.array(seen)
+    assert np.all(np.abs(seen) <= 1.0)          # squashed
+    assert seen.std(axis=0).max() > 1e-3        # and actually varying
+
+
+def test_informed_flow_drags_the_mid_toward_the_fundamental():
+    from lobrl import OrderBook
+    from lobrl.flow import FlowConfig, MarketFlow
+
+    book = OrderBook()
+    flow = MarketFlow(FlowConfig(informed_frac=0.5, fundamental_vol=0.4),
+                      np.random.default_rng(0))
+    flow.seed_book(book, 10_000)
+    mids, fund, informed = [], [], 0
+    for t in range(2000):
+        informed += flow.step(book)["informed"]
+        if t > 100:
+            mids.append(book.mid())
+            fund.append(flow.fundamental)
+    assert informed > 0
+    assert np.corrcoef(mids, fund)[0, 1] > 0.5   # price discovery happens
+
+    # And with the feature off, the market is exactly the uninformed one.
+    b2 = OrderBook()
+    f2 = MarketFlow(FlowConfig(), np.random.default_rng(0))
+    f2.seed_book(b2, 10_000)
+    assert sum(f2.step(b2)["informed"] for _ in range(300)) == 0

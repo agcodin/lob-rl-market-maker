@@ -32,6 +32,13 @@ class MultiEnvConfig:
     # onto [min_quote_size, max_quote_size]. A policy that outputs 0 for both
     # size components quotes exactly `quote_size`, so the 2-d action space is a
     # strict subset of the 4-d one and old policies stay comparable.
+    # Order-flow ("tape") features. The synthetic market has real structure the
+    # agent otherwise cannot see: aggressive orders arrive in Hawkes clusters and
+    # their sign leans with book imbalance. Without these the policy sees the
+    # book but never the tape, so that structure is unobservable to it.
+    flow_features: bool = False
+    flow_fast: float = 0.15      # EWMA weight, fast
+    flow_slow: float = 0.03      # EWMA weight, slow
     variable_size: bool = False
     min_quote_size: int = 2
     max_quote_size: int = 40
@@ -72,7 +79,9 @@ class MultiAgentMarketMakingEnv:
         self._ask_px = np.zeros(K, dtype=np.int32)
         self._ask_vol = np.zeros(K, dtype=np.int64)
 
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(4 * K + 8,), dtype=np.float32)
+        self.n_flow = 4 if self.cfg.flow_features else 0
+        self.observation_space = spaces.Box(-np.inf, np.inf,
+                                            shape=(4 * K + 8 + self.n_flow,), dtype=np.float32)
         self.act_dim = 4 if self.cfg.variable_size else 2
         self.action_space = spaces.Box(-1.0, 1.0, shape=(self.act_dim,), dtype=np.float32)
         self.n_agents = n
@@ -100,6 +109,11 @@ class MultiAgentMarketMakingEnv:
         self._mid_hist = np.full(self.cfg.vol_window, float(self.cfg.init_mid))
         self._hist_n = 0
         self.fill_log: list[tuple[int, int, float, int]] = []  # (agent, step, price, signed)
+        # Tape state: signed volume (fast/slow), arrival intensity, mean size.
+        self.f_fast = 0.0
+        self.f_slow = 0.0
+        self.f_rate = 0.0
+        self.f_size = 0.0
 
     def reset(self, *, seed=None, options=None):
         if seed is not None:
@@ -221,7 +235,9 @@ class MultiAgentMarketMakingEnv:
 
         idx = ((total - n_new) + np.arange(n_new)) % RING_SIZE
         ev = self._events[idx]
-        fills = ev[(ev["type"] == int(EventType.FILL)) & (ev["owner"] >= OWNER_BASE)]
+        all_fills = ev[ev["type"] == int(EventType.FILL)]
+        self._update_tape(all_fills)
+        fills = all_fills[all_fills["owner"] >= OWNER_BASE]
         for f in fills:
             i = int(f["owner"]) - OWNER_BASE
             if not 0 <= i < self.n_agents:
@@ -236,6 +252,26 @@ class MultiAgentMarketMakingEnv:
             self.volume_traded[i] += qty
             self.fill_log.append((i, self.step_count, price, signed))
         return d_inv
+
+    def _update_tape(self, fills) -> None:
+        """Fold this step's market-wide trades into the tape EWMAs.
+
+        A fill whose resting side is ASK means a buyer lifted the offer, so it is
+        buy-side flow; a resting BID means a seller hit the bid.
+        """
+        cfg = self.cfg
+        if len(fills):
+            qty = fills["qty"].astype(np.float64)
+            sign = np.where(fills["side"] == int(Side.ASK), 1.0, -1.0)
+            signed_vol = float((qty * sign).sum())
+            n = float(len(fills))
+            mean_size = float(qty.mean())
+        else:
+            signed_vol, n, mean_size = 0.0, 0.0, 0.0
+        self.f_fast += cfg.flow_fast * (signed_vol - self.f_fast)
+        self.f_slow += cfg.flow_slow * (signed_vol - self.f_slow)
+        self.f_rate += cfg.flow_fast * (n - self.f_rate)
+        self.f_size += 0.1 * (mean_size - self.f_size)
 
     def _book_trade(self, i: int, signed: int, price: float) -> None:
         """Average-cost accounting for agent i."""
@@ -285,7 +321,18 @@ class MultiAgentMarketMakingEnv:
         spread = float(spread) if spread > 0 else 0.0
         vol = self._volatility()
 
-        out = np.empty((self.n_agents, 4 * cfg.levels + 8), dtype=np.float32)
+        flow = ()
+        if self.n_flow:
+            # Squash to keep the scale comparable with the other features; the
+            # running normalizer handles the rest.
+            flow = (
+                np.tanh(self.f_fast / 200.0),
+                np.tanh(self.f_slow / 200.0),
+                np.tanh(self.f_rate / 3.0),
+                np.tanh(self.f_size / 60.0),
+            )
+
+        out = np.empty((self.n_agents, 4 * cfg.levels + 8 + self.n_flow), dtype=np.float32)
         for i in range(self.n_agents):
             unrealized = self.cash[i] + self.inventory[i] * mid
             out[i] = np.concatenate([
@@ -300,6 +347,7 @@ class MultiAgentMarketMakingEnv:
                     self._queue_ratio(int(self.bid_id[i])),
                     self._queue_ratio(int(self.ask_id[i])),
                 ],
+                flow,
             ])
         return out
 

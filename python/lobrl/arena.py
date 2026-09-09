@@ -31,6 +31,7 @@ import torch
 from lobrl.baselines import AvellanedaStoikovPolicy, FixedSpreadPolicy
 from lobrl.league import _AgentView
 from lobrl.metrics import summarize
+from lobrl.flow import FlowConfig
 from lobrl.multi_env import MultiAgentMarketMakingEnv, MultiEnvConfig
 from lobrl.ppo import ActorCritic, PPOConfig, PPOTrainer, RunningNorm
 from lobrl.selfplay import MultiRolloutBuffer
@@ -69,6 +70,11 @@ class ArenaConfig:
     variable_size: bool = False
     min_quote_size: int = 2
     max_quote_size: int = 40
+    # Tape features + informed takers. Together these turn adverse selection
+    # into something a policy can actually learn to see and avoid.
+    flow_features: bool = False
+    informed_frac: float = 0.0
+    fundamental_vol: float = 0.0
     hidden: int = 128
     seed: int = 0
 
@@ -165,7 +171,10 @@ def env_config(cfg: ArenaConfig, n: int) -> MultiEnvConfig:
                           inventory_penalty=cfg.inventory_penalty,
                           variable_size=cfg.variable_size,
                           min_quote_size=cfg.min_quote_size,
-                          max_quote_size=cfg.max_quote_size)
+                          max_quote_size=cfg.max_quote_size,
+                          flow_features=cfg.flow_features,
+                          flow=FlowConfig(informed_frac=cfg.informed_frac,
+                                          fundamental_vol=cfg.fundamental_vol))
 
 
 def _run_episode(policies, cfg: ArenaConfig, seed: int) -> list[dict]:
@@ -519,6 +528,11 @@ def main():
                     help="what a candidate must beat the incumbent on")
     ap.add_argument("--patience", type=int, default=8,
                     help="failed generations before reverting the learner to best.pt")
+    ap.add_argument("--flow-features", action="store_true",
+                    help="add tape features to the observation")
+    ap.add_argument("--informed-frac", type=float, default=0.0,
+                    help="fraction of takers who trade on the latent fundamental")
+    ap.add_argument("--fundamental-vol", type=float, default=0.0)
     ap.add_argument("--variable-size", action="store_true",
                     help="let the policy choose quote size as well as price")
     ap.add_argument("--hidden", type=int, default=128)
@@ -533,7 +547,10 @@ def main():
                       promote_metric=args.promote_metric,
                       inventory_penalty=args.inventory_penalty,
                       p_baseline=args.p_baseline,
-                      variable_size=args.variable_size, hidden=args.hidden)
+                      variable_size=args.variable_size, hidden=args.hidden,
+                      flow_features=args.flow_features,
+                      informed_frac=args.informed_frac,
+                      fundamental_vol=args.fundamental_vol)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))
