@@ -60,7 +60,11 @@ class ArenaConfig:
     max_inventory_ratio: float = 1.35
     max_abs_inventory: float = 40.0
     patience: int = 8                  # failed generations before reverting to best
-    inventory_penalty: float = 5e-3
+    # 5e-3 (the single-agent default) is too weak here: against a pool of mixed
+    # opponents the learner drifts toward inventory gambling within minutes.
+    # Measured: at 5e-3 the candidate ran |inv| ~16 and never beat the incumbent;
+    # at 2e-2 it holds ~12 and beats it by +5.6 Sharpe (t=2.9, 48 paired episodes).
+    inventory_penalty: float = 2e-2
     seed: int = 0
 
 
@@ -487,6 +491,10 @@ def main():
     ap.add_argument("--chunk-transitions", type=int, default=150_000)
     ap.add_argument("--eval-episodes", type=int, default=16)
     ap.add_argument("--episode-steps", type=int, default=1000)
+    ap.add_argument("--inventory-penalty", type=float, default=2e-2,
+                    help="phi in the training reward")
+    ap.add_argument("--p-baseline", type=float, default=0.15,
+                    help="chance an opponent seat is a heuristic quoter")
     ap.add_argument("--promote-metric", choices=["sharpe", "pnl"], default="sharpe",
                     help="what a candidate must beat the incumbent on")
     ap.add_argument("--patience", type=int, default=8,
@@ -499,7 +507,9 @@ def main():
                       hours=args.hours, chunk_transitions=args.chunk_transitions,
                       eval_episodes=args.eval_episodes, episode_steps=args.episode_steps,
                       patience=args.patience, seed=args.seed,
-                      promote_metric=args.promote_metric)
+                      promote_metric=args.promote_metric,
+                      inventory_penalty=args.inventory_penalty,
+                      p_baseline=args.p_baseline)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))

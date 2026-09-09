@@ -185,7 +185,20 @@ absolute inventory, positive on every held-out seed. Reproduce with
   silently means a bigger gradient batch and the sweep measures batch size
   rather than competition.
 
-### Head to head, one shared book (12 episodes, seats rotated)
+### Head to head, one shared book (32 episodes, seats rotated)
+
+| strategy | PnL | Sharpe | max DD | avg pos | fills | win rate |
+|---|---|---|---|---|---|---|
+| **New champion (arena)** | 781 | **41.5** | 150 | 11.6 | 160 | 100% |
+| Previous champion (self-play) | 511 | 35.5 | 119 | 8.3 | 98 | 100% |
+| Solo-trained | 333 | 21.7 | 99 | 5.5 | 33 | 94% |
+| Avellaneda–Stoikov | 340 | 5.4 | 1859 | 102.4 | 303 | 62% |
+| Fixed 3 ticks | −65 | 2.8 | 628 | 29.0 | 10 | 47% |
+
+`runs/champion.pt` is the current best policy. The earlier four-way table below
+is kept for the self-play vs solo-training comparison it makes.
+
+### Earlier: self-play vs solo training (12 episodes, seats rotated)
 
 | strategy | PnL | Sharpe | half-spread | fills | avg pos | win rate |
 |---|---|---|---|---|---|---|
@@ -247,6 +260,33 @@ runs prioritized fictitious self-play instead:
   older subsampled), so a long night does not fill the disk.
 - **Resumable** — restarting picks up `best.pt`, the pool, and the generation
   counter.
+
+The inventory penalty in the arena defaults to `2e-2`, four times the
+single-agent value. That is a measured setting, not a guess: at `5e-3` the
+learner drifts to ~16 average position within minutes and never beats the
+incumbent; at `2e-2` it holds ~12 and beats it by +5.6 Sharpe (t = 2.9 over 48
+paired episodes). Selection alone cannot fix this -- a correct gate just refuses
+everything and the run accomplishes nothing.
+
+### Measured: what actually improves the policy
+
+Four 10-minute arms, each warm-started from the same champion, evaluated in
+paired episodes (both policies quoting in the same book on the same seed) on a
+held-out seed block, then replicated on a second block:
+
+| arm | change | Sharpe gain | t (block 1) | t (block 2) |
+|---|---|---|---|---|
+| A | inventory penalty 5e-3 -> 2e-2 | **+5.6** | 3.99 | 2.85 |
+| B | drop heuristics from opponent pool | **+6.1** | 4.66 | 2.61 |
+| C | learner takes all 4 seats | +1.6 | 0.98 | — |
+| A+B | both together | −2.7 | — | −1.41 |
+
+A and B replicate and are statistically indistinguishable from each other
+(t = 0.56); combining them does not help. C -- which is closest to plain
+self-play with the pool used only for gating -- does nothing, which is the
+control showing the arena structure is what matters, not the extra transitions.
+Effect sizes shrink from block 1 to block 2 because block 1 was used to pick the
+winners; block 2 is the honest estimate.
 
 When the budget expires it runs the test suite, writes
 `runs/arena/MORNING_REPORT.md` (progress windows plus a final head-to-head
