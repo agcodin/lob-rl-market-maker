@@ -4,3 +4,4 @@ runs/
 *.egg-info/
 __pycache__/
 *.so
+runs/arena/

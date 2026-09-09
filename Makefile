@@ -1,7 +1,7 @@
 PY := .venv/bin/python
 PIP := .venv/bin/pip
 
-.PHONY: venv install bench bench-py test train eval selfplay sweep league dashboard perf clean
+.PHONY: venv install bench bench-py test train eval selfplay sweep league dashboard overnight overnight-stop arena-status perf clean
 
 venv:
 	python3 -m venv .venv && $(PIP) install -U pip wheel setuptools
@@ -51,6 +51,15 @@ dashboard:
 	$(PY) scripts/record_episode.py
 	$(PY) scripts/record_league.py
 	$(PY) scripts/build_dashboard.py
+
+overnight:
+	./scripts/overnight.sh 5.85
+
+overnight-stop:
+	./scripts/overnight.sh stop
+
+arena-status:
+	@cat runs/arena/status.json
 
 perf:
 	./scripts/profile_perf.sh

@@ -217,6 +217,41 @@ wide-quoting mode or an active tight-quoting one, which moves spread and fill
 count together. Separating that from a real effect of competition needs several
 training seeds per size, which has not been run.
 
+## 7. Overnight league training
+
+`make overnight` runs an unattended session that improves the policy against a
+growing pool of its own past selves. It is plain Python on the local CPU --
+no network calls, no external services.
+
+```bash
+make overnight          # 5.85 h budget, detached, keeps the Mac awake
+make arena-status       # progress while it runs
+make overnight-stop     # finishes the current generation, then saves
+```
+
+Plain self-play plateaus and can cycle: a policy learns to beat its current
+self, forgets what beat its older self, and goes round in circles. The arena
+runs prioritized fictitious self-play instead:
+
+- **Mixed opponents** — the learner holds 2 of 4 seats; the others are drawn per
+  episode from the live policy (45%), a heuristic quoter (15%), or a snapshot
+  from the pool, biased toward recent ones. Old snapshots keep having to be
+  beaten, which is what stops the cycling.
+- **A promotion gate** — after each generation the candidate plays the incumbent
+  over 32 shared-seed episodes with seats rotated, and is only promoted to
+  `best.pt` if it actually wins. This is what makes the run monotone rather than
+  merely long.
+- **A revert valve** — after 8 generations without a promotion the learner is
+  reloaded from `best.pt`, so an unattended run cannot spend hours adrift.
+- **Bounded footprint** — the snapshot pool is thinned to 60 files (recent kept,
+  older subsampled), so a long night does not fill the disk.
+- **Resumable** — restarting picks up `best.pt`, the pool, and the generation
+  counter.
+
+When the budget expires it runs the test suite, writes
+`runs/arena/MORNING_REPORT.md` (progress windows plus a final head-to-head
+against every earlier policy and both baselines), and rebuilds the dashboard.
+
 ## Notes and limitations
 
 - The engine is single-threaded by design; the arena and the price grid are the
@@ -231,5 +266,7 @@ training seeds per size, which has not been run.
 - The self-play runs were still improving at 1.2M transitions (reward trend
   still positive), so the sweep compares four equally-trained but not fully
   converged policies.
+- `caffeinate` keeps the Mac awake for the overnight run, but a closed laptop
+  lid still sleeps unless an external display is attached.
 - `make sweep` trains one seed per table size. The per-maker profit trend is
   monotonic across all four and survives that; the spread numbers do not.
