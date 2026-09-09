@@ -1,0 +1,1062 @@
+<title>Market Maker Replay</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --plane:        #f4f6f8;
+  --surface:      #fdfdfe;
+  --surface-2:    #eef1f4;
+  --ink:          #0e1117;
+  --ink-2:        #545c67;
+  --muted:        #8b939e;
+  --grid:         #e3e7eb;
+  --axis:         #c5ccd4;
+  --hairline:     rgba(14,17,23,0.10);
+  --shadow:       0 1px 2px rgba(14,17,23,0.05), 0 8px 24px -12px rgba(14,17,23,0.16);
+
+  --agent:        #2a78d6;   /* the learned policy */
+  --agent-soft:   rgba(42,120,214,0.14);
+  --as:           #eb6834;   /* Avellaneda-Stoikov baseline */
+  --buy:          #1baf7a;   /* bid side / bought */
+  --buy-soft:     rgba(27,175,122,0.16);
+  --sell:         #e34948;   /* ask side / sold */
+  --sell-soft:    rgba(227,73,72,0.16);
+  --base-1:       #9aa3ad;
+  --base-2:       #b4bcc5;
+  --base-3:       #ccd3da;
+  /* ordinal ramp for "number of makers" -- an ordered quantity, so one hue */
+  --ramp-0:       #86b6ef;
+  --ramp-1:       #3987e5;
+  --ramp-2:       #1c5cab;
+  --ramp-3:       #0d366b;
+
+  --f-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane:      #0d0f12;
+    --surface:    #171a1f;
+    --surface-2:  #1f242b;
+    --ink:        #f2f4f6;
+    --ink-2:      #a8b0ba;
+    --muted:      #7d858f;
+    --grid:       #262b32;
+    --axis:       #38404a;
+    --hairline:   rgba(255,255,255,0.10);
+    --shadow:     0 1px 2px rgba(0,0,0,0.4), 0 8px 24px -12px rgba(0,0,0,0.6);
+    --agent:      #3987e5;
+    --agent-soft: rgba(57,135,229,0.20);
+    --as:         #d95926;
+    --buy:        #199e70;
+    --buy-soft:   rgba(25,158,112,0.22);
+    --sell:       #e66767;
+    --sell-soft:  rgba(230,103,103,0.20);
+    --base-1:     #7d858f;
+    --base-2:     #626a74;
+    --base-3:     #4a525b;
+    --ramp-0:     #b7d3f6;
+    --ramp-1:     #6da7ec;
+    --ramp-2:     #2a78d6;
+    --ramp-3:     #184f95;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane:      #0d0f12;
+  --surface:    #171a1f;
+  --surface-2:  #1f242b;
+  --ink:        #f2f4f6;
+  --ink-2:      #a8b0ba;
+  --muted:      #7d858f;
+  --grid:       #262b32;
+  --axis:       #38404a;
+  --hairline:   rgba(255,255,255,0.10);
+  --shadow:     0 1px 2px rgba(0,0,0,0.4), 0 8px 24px -12px rgba(0,0,0,0.6);
+  --agent:      #3987e5;
+  --agent-soft: rgba(57,135,229,0.20);
+  --as:         #d95926;
+  --buy:        #199e70;
+  --buy-soft:   rgba(25,158,112,0.22);
+  --sell:       #e66767;
+  --sell-soft:  rgba(230,103,103,0.20);
+  --base-1:     #7d858f;
+  --base-2:     #626a74;
+  --base-3:     #4a525b;
+  --ramp-0:     #b7d3f6;
+  --ramp-1:     #6da7ec;
+  --ramp-2:     #2a78d6;
+  --ramp-3:     #184f95;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font-family: var(--f-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1240px; margin: 0 auto; padding: 28px 24px 64px; }
+
+/* ---------- masthead ---------- */
+.mast { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding-bottom: 18px; border-bottom: 1px solid var(--hairline); }
+.mast h1 { font-size: 27px; font-weight: 700; letter-spacing: -0.02em; margin: 4px 0 0; text-wrap: balance; }
+.eyebrow { font-family: var(--f-mono); font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+.mast-meta { display: flex; gap: 22px; font-family: var(--f-mono); font-size: 11.5px; color: var(--ink-2); }
+.mast-meta b { display: block; color: var(--muted); font-weight: 500; font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; }
+
+.thesis { max-width: 68ch; margin: 20px 0 24px; font-size: 15.5px; color: var(--ink-2); }
+.thesis strong { color: var(--ink); font-weight: 600; }
+
+/* ---------- stat tiles ---------- */
+.tiles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1px; background: var(--hairline); border: 1px solid var(--hairline); border-radius: 10px; overflow: hidden; }
+.tile { background: var(--surface); padding: 14px 16px 15px; display: flex; flex-direction: column; gap: 3px; }
+.tile .k { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+.tile .v { font-family: var(--f-mono); font-size: 25px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.tile .n { font-size: 11.5px; color: var(--ink-2); }
+.tile .n em { font-style: normal; font-family: var(--f-mono); color: var(--ink); }
+.tile.hero .v { color: var(--agent); }
+
+/* ---------- sections ---------- */
+section { margin-top: 40px; }
+.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin-bottom: 14px; }
+.sec-head h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.015em; margin: 0; }
+.sec-head p { margin: 0; font-size: 13px; color: var(--ink-2); max-width: 62ch; }
+
+.panel { background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px; box-shadow: var(--shadow); }
+.panel-pad { padding: 16px 18px 18px; }
+
+/* ---------- replay ---------- */
+.replay { display: grid; grid-template-columns: minmax(0,1fr) 268px; gap: 1px; background: var(--hairline); border-radius: 12px; overflow: hidden; border: 1px solid var(--hairline); box-shadow: var(--shadow); }
+.replay > div { background: var(--surface); }
+.detail { padding: 14px 16px 10px; min-width: 0; }
+.ladder { padding: 14px 14px 16px; }
+.panel-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.panel-title h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.panel-title .sub { font-family: var(--f-mono); font-size: 10.5px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+
+.lad-row { display: grid; grid-template-columns: 62px 1fr 46px; align-items: center; gap: 8px; height: 21px; font-family: var(--f-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.lad-px { text-align: right; color: var(--ink-2); }
+.lad-bar { height: 11px; border-radius: 2px; position: relative; background: var(--surface-2); overflow: hidden; }
+.lad-bar i { position: absolute; inset: 0 auto 0 0; display: block; border-radius: 2px; }
+.lad-vol { text-align: right; color: var(--muted); font-size: 11px; }
+.lad-row.you .lad-px { color: var(--agent); font-weight: 600; }
+.lad-row.you { background: var(--agent-soft); border-radius: 3px; }
+.lad-gap { display: grid; grid-template-columns: 62px 1fr 46px; gap: 8px; align-items: center; height: 26px; font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.lad-gap .rule { height: 1px; background: var(--axis); }
+.lad-side { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 2px 0 4px; }
+.lad-side.ask { color: var(--sell); }
+.lad-side.bid { color: var(--buy); }
+.you-chip { display: inline-block; font-family: var(--f-mono); font-size: 9.5px; letter-spacing: 0.08em; padding: 0 4px; border-radius: 3px; background: var(--agent); color: #fff; margin-left: 6px; vertical-align: 1px; }
+
+/* ---------- transport ---------- */
+.transport { display: flex; align-items: center; gap: 14px; padding: 12px 16px; flex-wrap: wrap; }
+button.play { font-family: var(--f-mono); font-size: 12px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--surface); background: var(--ink); border: 0; border-radius: 6px; padding: 7px 14px; cursor: pointer; min-width: 76px; }
+button.play:hover { opacity: 0.86; }
+button.ghost { font-family: var(--f-mono); font-size: 11.5px; color: var(--ink-2); background: transparent; border: 1px solid var(--hairline); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+button.ghost:hover { background: var(--surface-2); color: var(--ink); }
+button.ghost[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+:is(button, input, a):focus-visible { outline: 2px solid var(--agent); outline-offset: 2px; }
+input[type="range"] { flex: 1; min-width: 220px; accent-color: var(--agent); height: 22px; }
+.step-read { font-family: var(--f-mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink-2); min-width: 96px; }
+.step-read b { color: var(--ink); font-weight: 600; }
+
+/* ---------- readouts ---------- */
+.readouts { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1px; background: var(--hairline); border-top: 1px solid var(--hairline); }
+.readouts > div { background: var(--surface); padding: 10px 14px 12px; }
+.readouts .k { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+.readouts .v { font-family: var(--f-mono); font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+/* ---------- charts ---------- */
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+.ax { font-family: var(--f-mono); font-size: 10px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.gridline { stroke: var(--grid); stroke-width: 1; }
+.axisline { stroke: var(--axis); stroke-width: 1; }
+.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11.5px; color: var(--ink-2); margin-top: 10px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; font-family: var(--f-mono); font-size: 11px; }
+.swatch { width: 11px; height: 3px; border-radius: 2px; display: inline-block; }
+.swatch.dot { width: 8px; height: 8px; border-radius: 50%; }
+
+.tip { position: fixed; pointer-events: none; z-index: 20; background: var(--surface); border: 1px solid var(--hairline); border-radius: 8px; box-shadow: var(--shadow); padding: 8px 10px; font-family: var(--f-mono); font-size: 11px; line-height: 1.6; color: var(--ink); opacity: 0; transition: opacity .1s; font-variant-numeric: tabular-nums; }
+.tip b { color: var(--muted); font-weight: 500; }
+
+/* ---------- skew ---------- */
+.skew { display: grid; grid-template-columns: minmax(0,1.35fr) minmax(0,1fr); gap: 22px; align-items: start; }
+.skew-note p { font-size: 13.5px; color: var(--ink-2); margin: 0 0 12px; }
+.skew-note p:last-child { margin-bottom: 0; }
+.skew-note strong { color: var(--ink); font-weight: 600; }
+.pull { font-family: var(--f-mono); font-size: 12px; color: var(--ink-2); border-left: 2px solid var(--agent); padding: 4px 0 4px 12px; margin: 14px 0 0; }
+.pull b { color: var(--ink); }
+
+/* ---------- table ---------- */
+.tbl-scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: right; padding: 9px 12px; white-space: nowrap; }
+th { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--axis); }
+td { font-family: var(--f-mono); font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--grid); color: var(--ink-2); }
+th:first-child, td:first-child { text-align: left; font-family: var(--f-sans); }
+tr.is-agent td { color: var(--ink); font-weight: 500; background: var(--agent-soft); }
+tr.is-agent td:first-child { font-weight: 600; }
+td.best { color: var(--ink); font-weight: 600; }
+.mark { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 8px; vertical-align: 0px; }
+.tbl-note { font-size: 12px; color: var(--muted); margin: 12px 0 0; }
+
+/* ---------- competition ---------- */
+.sweep-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.ordinal-key { display: flex; gap: 14px; flex-wrap: wrap; font-family: var(--f-mono); font-size: 11px; color: var(--ink-2); margin-top: 12px; align-items: center; }
+.ordinal-key i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; margin-right: 6px; vertical-align: -1px; }
+
+.makers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--hairline); border-top: 1px solid var(--hairline); }
+.maker { background: var(--surface); padding: 11px 14px 13px; display: flex; flex-direction: column; gap: 5px; }
+.maker .who { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; }
+.maker .rows { display: grid; grid-template-columns: auto auto; gap: 1px 10px; font-family: var(--f-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.maker .rows b { color: var(--ink); font-weight: 500; text-align: right; }
+.badge { display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px; border-radius: 5px; font-family: var(--f-mono); font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em; background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--hairline); flex: none; }
+.badge.lead { background: var(--agent); color: #fff; border-color: transparent; }
+.lad-chips { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: 1px; }
+.lad-chips .badge { width: 16px; height: 14px; font-size: 8.5px; border-radius: 3px; }
+
+/* ---------- footer ---------- */
+footer { margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--hairline); display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 26px; }
+footer h3 { font-size: 13px; margin: 0 0 8px; font-weight: 600; }
+footer p, footer li { font-size: 12.5px; color: var(--ink-2); margin: 0 0 6px; }
+footer ul { margin: 0; padding-left: 18px; }
+pre { font-family: var(--f-mono); font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--hairline); border-radius: 8px; padding: 10px 12px; overflow-x: auto; color: var(--ink-2); margin: 0; }
+
+@media (max-width: 900px) {
+  .tiles { grid-template-columns: repeat(2, 1fr); }
+  .tiles .tile:last-child { grid-column: 1 / -1; }
+  .replay { grid-template-columns: 1fr; }
+  .chart-grid, .skew, footer { grid-template-columns: 1fr; }
+  .readouts { grid-template-columns: repeat(3, 1fr); }
+  .sweep-grid { grid-template-columns: 1fr; }
+  .makers { grid-template-columns: repeat(2, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <div>
+      <div class="eyebrow">Reinforcement learning · limit order book simulator</div>
+      <h1>Market Maker Replay</h1>
+    </div>
+    <div class="mast-meta">
+      <div><b>Episode</b><span id="m-seed"></span></div>
+      <div><b>Steps</b><span id="m-steps"></span></div>
+      <div><b>Quote size</b><span id="m-size"></span></div>
+      <div><b>Training</b>1.2M steps</div>
+    </div>
+  </header>
+
+  <p class="thesis">A PPO agent posts a buy and a sell quote every tick and gets paid the spread when both sides fill.
+  Its real problem is <strong>inventory</strong>: every unfilled share it holds is a directional bet it never meant to make.
+  This page replays one held-out episode the agent never trained on, tick by tick, and shows what it learned to do about that.</p>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section>
+    <div class="sec-head">
+      <h2>Tick-by-tick replay</h2>
+      <p>The ladder is the live order book. Scrub or play to watch the agent move its two quotes as the market moves and its position changes.</p>
+    </div>
+    <div class="replay">
+      <div class="detail">
+        <div class="panel-title">
+          <h3>Price &amp; quotes</h3>
+          <span class="sub" id="win-label"></span>
+        </div>
+        <svg id="detail-chart" viewBox="0 0 720 260" role="img" aria-label="Mid price with the agent's bid and ask quotes over a 80-step window"></svg>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--ink-2)"></i>mid price</span>
+          <span><i class="swatch" style="background:var(--buy)"></i>agent bid</span>
+          <span><i class="swatch" style="background:var(--sell)"></i>agent ask</span>
+          <span><i class="swatch dot" style="background:var(--buy)"></i>bought</span>
+          <span><i class="swatch dot" style="background:var(--sell)"></i>sold</span>
+        </div>
+      </div>
+      <div class="ladder">
+        <div class="panel-title">
+          <h3>Order book</h3>
+          <span class="sub">depth</span>
+        </div>
+        <div id="ladder"></div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:1px;border-radius:0 0 12px 12px">
+      <div class="transport">
+        <button class="play" id="play" aria-label="Play or pause the replay">Play</button>
+        <input type="range" id="scrub" min="0" max="999" value="0" aria-label="Replay step">
+        <span class="step-read">step <b id="step-n">0</b> / <span id="step-max"></span></span>
+        <button class="ghost" id="speed" aria-pressed="false">1&times;</button>
+      </div>
+      <div class="readouts" id="readouts"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>What it learned: inventory skew</h2>
+      <p>Mean distance from the mid price the agent placed each quote, grouped by the position it was holding at the time.</p>
+    </div>
+    <div class="panel panel-pad">
+      <div class="skew">
+        <div>
+          <svg id="skew-chart" viewBox="0 0 620 300" role="img" aria-label="Mean quote offset by inventory bucket"></svg>
+          <div class="legend">
+            <span><i class="swatch" style="background:var(--buy)"></i>bid offset — how far below mid it will buy</span>
+            <span><i class="swatch" style="background:var(--sell)"></i>ask offset — how far above mid it will sell</span>
+          </div>
+        </div>
+        <div class="skew-note">
+          <p>Nobody told the agent this rule. It has no notion of "inventory risk" — only a reward that subtracts
+          <span style="font-family:var(--f-mono)">&phi;q&sup2;</span> every step it holds a position.</p>
+          <p>From that alone it derived the market maker's reflex: <strong>when it is long, it drops its ask on top of the
+          market and pulls its bid away</strong> — attractive to buyers, unattractive to sellers, so the next fill is more
+          likely to flatten it than deepen it. When short, exactly mirrored.</p>
+          <p>This is the same behaviour the closed-form Avellaneda&ndash;Stoikov quoter gets by construction, arrived at
+          from scratch by gradient descent on PnL.</p>
+          <p class="pull">Correlation between position and quote skew: <b id="corr"></b></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>Against the baselines, same market</h2>
+      <p>Every policy trades the identical seeded episode. The dumb strategies make more money — by accident, and by carrying a position ten times larger.</p>
+    </div>
+    <div class="chart-grid">
+      <div class="panel panel-pad">
+        <div class="panel-title"><h3>Position held</h3><span class="sub">shares</span></div>
+        <svg id="inv-chart" viewBox="0 0 560 260" role="img" aria-label="Inventory over time for each policy"></svg>
+        <div class="legend" id="inv-legend"></div>
+      </div>
+      <div class="panel panel-pad">
+        <div class="panel-title"><h3>Cumulative PnL</h3><span class="sub">ticks &times; shares</span></div>
+        <svg id="eq-chart" viewBox="0 0 560 260" role="img" aria-label="Equity curve for each policy"></svg>
+        <div class="legend" id="eq-legend"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>Held-out results</h2>
+      <p>Averaged over 30 episodes with seeds the agent never saw in training.</p>
+    </div>
+    <div class="panel panel-pad">
+      <div class="tbl-scroll"><table id="agg-table"></table></div>
+      <p class="tbl-note">Sharpe is annualized from per-step PnL. Markout is the mid-price move against a fill over the next 10 steps — negative is favourable. PnL is in ticks &times; shares; at a 1&cent; tick, the agent's 801 is about $8 on a 20-share quote.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>How it got there</h2>
+      <p>Reward and average position over 1.2M training steps. The agent found the profit first and the risk control second.</p>
+    </div>
+    <div class="chart-grid">
+      <div class="panel panel-pad">
+        <div class="panel-title"><h3>Episode reward</h3><span class="sub">mean of last 10</span></div>
+        <svg id="tr-ret" viewBox="0 0 560 220" role="img" aria-label="Mean episode reward during training"></svg>
+      </div>
+      <div class="panel panel-pad">
+        <div class="panel-title"><h3>Average position</h3><span class="sub">|shares|</span></div>
+        <svg id="tr-inv" viewBox="0 0 560 220" role="img" aria-label="Mean absolute inventory during training"></svg>
+      </div>
+    </div>
+  </section>
+
+  <section id="competition-section">
+    <div class="sec-head">
+      <h2>What competition costs a market maker</h2>
+      <p>Each table size has its own policy, trained by self-play against copies of itself at that size, on an identical
+      budget of 1.2M transitions and 2,048 transitions per update. So each row is that market's own equilibrium, not one
+      policy dropped into a crowd it never trained against.</p>
+    </div>
+    <div class="panel panel-pad">
+      <div class="sweep-grid">
+        <div>
+          <div class="panel-title"><h3>Profit per maker</h3><span class="sub">ticks &times; shares</span></div>
+          <svg id="sw-pnl" viewBox="0 0 320 220" role="img" aria-label="Profit per maker by number of competing makers"></svg>
+        </div>
+        <div>
+          <div class="panel-title"><h3>Profit, all makers</h3><span class="sub">ticks &times; shares</span></div>
+          <svg id="sw-total" viewBox="0 0 320 220" role="img" aria-label="Total profit across all makers"></svg>
+        </div>
+        <div>
+          <div class="panel-title"><h3>Position carried</h3><span class="sub">|shares|</span></div>
+          <svg id="sw-inv" viewBox="0 0 320 220" role="img" aria-label="Average absolute position by number of competing makers"></svg>
+        </div>
+      </div>
+      <div class="ordinal-key" id="sweep-key"></div>
+      <div class="tbl-scroll" style="margin-top:18px"><table id="sweep-table"></table></div>
+      <p class="tbl-note" id="sweep-note"></p>
+    </div>
+  </section>
+
+  <section id="replay-multi">
+    <div class="sec-head">
+      <h2>Four makers, one book</h2>
+      <p>The same replay, now with four different strategies quoting into a single order book at the same time.
+      A fill one of them wins is a fill the other three lost. Seats are reshuffled every step so no strategy gets
+      a standing queue advantage.</p>
+    </div>
+    <div class="replay">
+      <div class="detail">
+        <div class="panel-title">
+          <h3>Mid price &amp; every maker's quotes</h3>
+          <span class="sub" id="m-win-label"></span>
+        </div>
+        <svg id="m-detail" viewBox="0 0 720 260" role="img" aria-label="Mid price with all four makers' quotes"></svg>
+        <div class="legend">
+          <span><i class="swatch" style="background:var(--ink-2)"></i>mid price</span>
+          <span><i class="swatch" style="background:var(--buy)"></i>bids (all makers)</span>
+          <span><i class="swatch" style="background:var(--sell)"></i>asks (all makers)</span>
+          <span>badges mark which maker owns each quote</span>
+        </div>
+      </div>
+      <div class="ladder">
+        <div class="panel-title"><h3>Order book</h3><span class="sub">who is where</span></div>
+        <div id="m-ladder"></div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:1px;border-radius:0 0 12px 12px">
+      <div class="transport">
+        <button class="play" id="m-play" aria-label="Play or pause the multi-maker replay">Play</button>
+        <input type="range" id="m-scrub" min="0" max="999" value="0" aria-label="Replay step">
+        <span class="step-read">step <b id="m-step-n">0</b> / <span id="m-step-max"></span></span>
+        <button class="ghost" id="m-speed" aria-pressed="false">1&times;</button>
+      </div>
+      <div class="makers" id="makers"></div>
+    </div>
+  </section>
+
+  <section id="league-section">
+    <div class="sec-head">
+      <h2>Head to head</h2>
+      <p>Average result per strategy across <span id="lg-eps"></span> shared-book episodes, with seat assignments
+      rotated so every strategy plays every position.</p>
+    </div>
+    <div class="panel panel-pad">
+      <svg id="lg-chart" viewBox="0 0 700 180" role="img" aria-label="Profit per strategy competing in one book"></svg>
+      <div class="tbl-scroll" style="margin-top:16px"><table id="lg-table"></table></div>
+      <p class="tbl-note">Same columns as the solo table, but every number here was earned against the other three
+      rather than in a private market.</p>
+    </div>
+  </section>
+
+  <footer>
+    <div>
+      <h3>What you are looking at</h3>
+      <p>A C++20 matching engine (4&ndash;7&nbsp;ns per order operation, no heap allocation on the hot path) driving a
+      synthetic market: Poisson passive flow, queue-dependent cancellations, Hawkes-clustered aggressive orders and
+      power-law trade sizes. The agent sees the top 5 book levels, imbalance, its own position, volatility and queue
+      position, and outputs two numbers &mdash; how far below and above the mid to quote.</p>
+      <p>Reward: <span style="font-family:var(--f-mono)">R = &Delta;PnL &minus; &phi;q&sup2; &minus; &eta;(&Delta;q)&sup2;</span>
+      &mdash; the Avellaneda&ndash;Stoikov utility, with <span style="font-family:var(--f-mono)">&phi;</span> penalizing held
+      inventory and <span style="font-family:var(--f-mono)">&eta;</span> penalizing churn.</p>
+    </div>
+    <div>
+      <h3>Reproduce</h3>
+      <pre>make install
+make test          # 28 engine + env tests
+make bench         # latency percentiles
+make train         # 1.2M steps, ~5 min CPU
+make eval          # this comparison table</pre>
+      <ul style="margin-top:10px">
+        <li>The market is synthetic &mdash; these Sharpe numbers describe this simulator, not a real venue.</li>
+        <li>Baselines run on identical seeds, so the comparison is like for like.</li>
+      </ul>
+    </div>
+  </footer>
+</div>
+
+<div class="tip" id="tip" role="status" aria-live="polite"></div>
+
+<script id="payload" type="application/json">__PAYLOAD__</script>
+<script>
+(function () {
+  "use strict";
+  const D = JSON.parse(document.getElementById("payload").textContent);
+  const T = D.ppo.trace, BOOK = D.ppo.book, N = T.mid.length;
+  const NS = "http://www.w3.org/2000/svg";
+  const fmt = (x, d) => x.toFixed(d === undefined ? 1 : d);
+  const sgn = (x) => (x > 0 ? "+" : "") + x;
+  const el = (id) => document.getElementById(id);
+
+  function svg(tag, attrs, parent) {
+    const n = document.createElementNS(NS, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function text(p, x, y, s, cls, anchor) {
+    const t = svg("text", { x: x, y: y, class: cls || "ax" }, p);
+    if (anchor) t.setAttribute("text-anchor", anchor);
+    t.textContent = s;
+    return t;
+  }
+  function ticks(lo, hi, n) {
+    const raw = (hi - lo) / n;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) || mag * 10;
+    const out = [];
+    for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(6));
+    return out;
+  }
+
+  /* ---------------- masthead + tiles ---------------- */
+  el("m-seed").textContent = "#" + D.seed;
+  el("m-steps").textContent = D.steps.toLocaleString();
+  el("m-size").textContent = D.config.quote_size + " sh";
+  el("step-max").textContent = N - 1;
+  el("scrub").max = N - 1;
+
+  const AGG = D.aggregate;
+  const NAMES = { ppo: "PPO agent", avellaneda_stoikov: "Avellaneda–Stoikov", fixed_1t: "Fixed 1 tick", fixed_3t: "Fixed 3 ticks", fixed_6t: "Fixed 6 ticks" };
+  const COLORS = { ppo: "var(--agent)", avellaneda_stoikov: "var(--as)", fixed_1t: "var(--base-1)", fixed_3t: "var(--base-2)", fixed_6t: "var(--base-3)" };
+  const ORDER = ["ppo", "avellaneda_stoikov", "fixed_1t", "fixed_3t", "fixed_6t"];
+  const others = ORDER.filter((k) => k !== "ppo");
+  const bestOther = (key, better) => others.map((k) => AGG[k][key]).reduce((a, b) => (better === "min" ? Math.min(a, b) : Math.max(a, b)));
+
+  const tiles = [
+    { k: "Sharpe ratio", v: fmt(AGG.ppo.sharpe), n: "best baseline <em>" + fmt(bestOther("sharpe", "max")) + "</em>", hero: true },
+    { k: "Max drawdown", v: Math.round(AGG.ppo.max_drawdown), n: "best baseline <em>" + Math.round(bestOther("max_drawdown", "min")) + "</em>" },
+    { k: "Avg position", v: fmt(AGG.ppo.mean_abs_inventory), n: "best baseline <em>" + fmt(bestOther("mean_abs_inventory", "min")) + "</em>" },
+    { k: "Profitable runs", v: Math.round(AGG.ppo.win_rate * 100) + "%", n: "30 held-out episodes" },
+    { k: "Fills / episode", v: Math.round(AGG.ppo.n_fills), n: "both sides, <em>" + D.config.quote_size + "</em> sh each" },
+  ];
+  el("tiles").innerHTML = tiles.map((t) =>
+    '<div class="tile' + (t.hero ? " hero" : "") + '"><span class="k">' + t.k + '</span><span class="v">' + t.v + '</span><span class="n">' + t.n + "</span></div>"
+  ).join("");
+
+  /* ---------------- shared tooltip ---------------- */
+  const tip = el("tip");
+  function showTip(evt, html) {
+    tip.innerHTML = html;
+    tip.style.opacity = "1";
+    const r = tip.getBoundingClientRect();
+    let x = evt.clientX + 14, y = evt.clientY - r.height - 10;
+    if (x + r.width > innerWidth - 8) x = evt.clientX - r.width - 14;
+    if (y < 8) y = evt.clientY + 16;
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  }
+  const hideTip = () => { tip.style.opacity = "0"; };
+
+  /* ---------------- replay: detail chart ---------------- */
+  const detail = el("detail-chart");
+  const DW = 720, DH = 260, DM = { l: 46, r: 12, t: 10, b: 22 };
+  const WIN = 80;
+  const fills = D.ppo.fills;
+  const fillsByStep = new Map();
+  fills.forEach((f) => { if (!fillsByStep.has(f.step)) fillsByStep.set(f.step, []); fillsByStep.get(f.step).push(f); });
+
+  function drawDetail(cur) {
+    detail.textContent = "";
+    const a = Math.max(0, Math.min(cur - Math.floor(WIN / 2), N - WIN)), b = Math.min(N, a + WIN);
+    el("win-label").textContent = "steps " + a + "–" + (b - 1);
+    let lo = Infinity, hi = -Infinity;
+    for (let i = a; i < b; i++) {
+      lo = Math.min(lo, T.mid[i], T.quote_bid[i] > 0 ? T.quote_bid[i] : Infinity);
+      hi = Math.max(hi, T.mid[i], T.quote_ask[i] > 0 ? T.quote_ask[i] : -Infinity);
+    }
+    const pad = Math.max(1.5, (hi - lo) * 0.12);
+    lo -= pad; hi += pad;
+    const X = (i) => DM.l + ((i - a) / (WIN - 1)) * (DW - DM.l - DM.r);
+    const Y = (p) => DM.t + (1 - (p - lo) / (hi - lo)) * (DH - DM.t - DM.b);
+
+    ticks(lo, hi, 4).forEach((v) => {
+      svg("line", { x1: DM.l, x2: DW - DM.r, y1: Y(v), y2: Y(v), class: "gridline" }, detail);
+      text(detail, DM.l - 8, Y(v) + 3.5, v.toFixed(1), "ax", "end");
+    });
+    [a, a + Math.floor(WIN / 2), b - 1].forEach((i) => text(detail, X(i), DH - 5, i, "ax", "middle"));
+
+    const line = (key, color, dash) => {
+      let d = "", pen = false;
+      for (let i = a; i < b; i++) {
+        const v = T[key][i];
+        if (v <= 0) { pen = false; continue; }
+        d += (pen ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1) + " ";
+        pen = true;
+      }
+      const p = svg("path", { d: d, fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round" }, detail);
+      if (dash) p.setAttribute("stroke-dasharray", dash);
+    };
+    // Quote band first so the mid line reads on top of it.
+    let band = "";
+    for (let i = a; i < b; i++) if (T.quote_bid[i] > 0 && T.quote_ask[i] > 0) band += (band ? "L" : "M") + X(i).toFixed(1) + " " + Y(T.quote_ask[i]).toFixed(1) + " ";
+    for (let i = b - 1; i >= a; i--) if (T.quote_bid[i] > 0 && T.quote_ask[i] > 0) band += "L" + X(i).toFixed(1) + " " + Y(T.quote_bid[i]).toFixed(1) + " ";
+    if (band) svg("path", { d: band + "Z", fill: "var(--agent-soft)", stroke: "none" }, detail);
+    line("quote_ask", "var(--sell)");
+    line("quote_bid", "var(--buy)");
+    line("mid", "var(--ink-2)");
+
+    for (let i = a; i < b; i++) {
+      const fs = fillsByStep.get(i);
+      if (!fs) continue;
+      fs.forEach((f) => {
+        svg("circle", { cx: X(i), cy: Y(f.price), r: 4, fill: f.qty > 0 ? "var(--buy)" : "var(--sell)", stroke: "var(--surface)", "stroke-width": 2 }, detail);
+      });
+    }
+    svg("line", { x1: X(cur), x2: X(cur), y1: DM.t, y2: DH - DM.b, stroke: "var(--agent)", "stroke-width": 1.5, "stroke-dasharray": "3 3" }, detail);
+    svg("line", { x1: DM.l, x2: DW - DM.r, y1: DH - DM.b, y2: DH - DM.b, class: "axisline" }, detail);
+  }
+
+  /* ---------------- replay: ladder ---------------- */
+  let volMax = 1;
+  for (let i = 0; i < N; i++) for (let k = 0; k < 5; k++) volMax = Math.max(volMax, BOOK.bid_vol[i][k], BOOK.ask_vol[i][k]);
+  volMax *= 0.8;
+
+  function drawLadder(i) {
+    const qb = T.quote_bid[i], qa = T.quote_ask[i];
+    const row = (px, vol, side, mine) =>
+      px < 0
+        ? '<div class="lad-row"><span class="lad-px">—</span><span class="lad-bar"></span><span class="lad-vol"></span></div>'
+        : '<div class="lad-row' + (mine ? " you" : "") + '"><span class="lad-px">' + px +
+          (mine ? '<span class="you-chip">YOU</span>' : "") + '</span><span class="lad-bar"><i style="width:' +
+          Math.min(100, (vol / volMax) * 100).toFixed(1) + "%;background:var(--" + side + ")\"></i></span><span class=\"lad-vol\">" + vol + "</span></div>";
+
+    let h = '<div class="lad-side ask">Asks · sellers</div>';
+    for (let k = 4; k >= 0; k--) h += row(BOOK.ask_px[i][k], BOOK.ask_vol[i][k], "sell", BOOK.ask_px[i][k] === qa);
+    h += '<div class="lad-gap"><span class="lad-px">' + fmt(T.mid[i]) + '</span><span class="rule"></span><span class="lad-vol">mid</span></div>';
+    for (let k = 0; k < 5; k++) h += row(BOOK.bid_px[i][k], BOOK.bid_vol[i][k], "buy", BOOK.bid_px[i][k] === qb);
+    h += '<div class="lad-side bid">Bids · buyers</div>';
+    el("ladder").innerHTML = h;
+  }
+
+  /* ---------------- replay: readouts ---------------- */
+  function drawReadouts(i) {
+    const inv = T.inventory[i], eq = T.equity[i];
+    const cells = [
+      { k: "Position", v: sgn(inv), c: inv > 0 ? "var(--buy)" : inv < 0 ? "var(--sell)" : "var(--ink)" },
+      { k: "PnL", v: (eq >= 0 ? "+" : "") + Math.round(eq), c: "var(--agent)" },
+      { k: "Bid offset", v: fmt(T.delta_bid[i]) + "t", c: "var(--buy)" },
+      { k: "Ask offset", v: fmt(T.delta_ask[i]) + "t", c: "var(--sell)" },
+      { k: "Book spread", v: T.spread[i] + "t", c: "var(--ink)" },
+      { k: "Fills so far", v: fills.filter((f) => f.step <= i).length, c: "var(--ink)" },
+    ];
+    el("readouts").innerHTML = cells.map((c) => '<div><div class="k">' + c.k + '</div><div class="v" style="color:' + c.c + '">' + c.v + "</div></div>").join("");
+  }
+
+  let cur = 0;
+  function goto(i) {
+    cur = Math.max(0, Math.min(N - 1, i | 0));
+    el("scrub").value = cur;
+    el("step-n").textContent = cur;
+    drawDetail(cur);
+    drawLadder(cur);
+    drawReadouts(cur);
+  }
+  el("scrub").addEventListener("input", (e) => { stop(); goto(+e.target.value); });
+
+  let timer = null, speed = 1;
+  const playBtn = el("play");
+  function stop() { if (timer) { clearInterval(timer); timer = null; playBtn.textContent = "Play"; } }
+  playBtn.addEventListener("click", () => {
+    if (timer) return stop();
+    if (cur >= N - 1) goto(0);
+    playBtn.textContent = "Pause";
+    timer = setInterval(() => { if (cur >= N - 1) return stop(); goto(cur + speed); }, 60);
+  });
+  el("speed").addEventListener("click", (e) => {
+    speed = speed === 1 ? 5 : speed === 5 ? 20 : 1;
+    e.target.textContent = speed + "×";
+    e.target.setAttribute("aria-pressed", speed !== 1);
+  });
+
+  /* ---------------- skew chart ---------------- */
+  (function () {
+    const s = el("skew-chart"), W = 620, H = 300, M = { l: 42, r: 14, t: 14, b: 54 };
+    const B = D.skew.buckets;
+    const maxV = Math.max.apply(null, B.map((d) => Math.max(d.bid, d.ask))) * 1.15;
+    const bw = (W - M.l - M.r) / B.length;
+    const Y = (v) => M.t + (1 - v / maxV) * (H - M.t - M.b);
+    ticks(0, maxV, 4).forEach((v) => {
+      svg("line", { x1: M.l, x2: W - M.r, y1: Y(v), y2: Y(v), class: "gridline" }, s);
+      text(s, M.l - 8, Y(v) + 3.5, v, "ax", "end");
+    });
+    text(s, M.l - 8, M.t - 2, "ticks", "ax", "end");
+    B.forEach((d, i) => {
+      const x0 = M.l + i * bw, pad = bw * 0.16, w = (bw - pad * 2 - 2) / 2;
+      [["bid", "var(--buy)", 0], ["ask", "var(--sell)", w + 2]].forEach(([key, color, dx]) => {
+        const v = d[key], y = Y(v);
+        const g = svg("g", {}, s);
+        svg("rect", { x: x0 + pad + dx, y: y, width: w, height: H - M.b - y, rx: 4, fill: color }, g);
+        text(s, x0 + pad + dx + w / 2, y - 6, v.toFixed(1), "ax", "middle").setAttribute("fill", "var(--ink)");
+        g.addEventListener("mousemove", (e) => showTip(e, "<b>" + d.label + "</b><br>" + key + " offset " + v.toFixed(2) + " ticks<br><b>" + d.n + " steps</b>"));
+        g.addEventListener("mouseleave", hideTip);
+      });
+      text(s, x0 + bw / 2, H - M.b + 18, d.label, "ax", "middle");
+      text(s, x0 + bw / 2, H - M.b + 32, d.n + " steps", "ax", "middle").setAttribute("opacity", "0.7");
+    });
+    svg("line", { x1: M.l, x2: W - M.r, y1: H - M.b, y2: H - M.b, class: "axisline" }, s);
+    text(s, (W - M.l) / 2 + M.l / 2, H - 6, "position held going into the step", "ax", "middle");
+    el("corr").textContent = "+" + D.skew.corr;
+  })();
+
+  /* ---------------- comparison line charts ---------------- */
+  function seriesChart(node, legendNode, get, label, fmtV) {
+    const W = 560, H = 260, M = { l: 48, r: 60, t: 12, b: 24 };
+    let lo = Infinity, hi = -Infinity;
+    ORDER.forEach((k) => { get(k).forEach((v) => { lo = Math.min(lo, v); hi = Math.max(hi, v); }); });
+    const pad = (hi - lo) * 0.08 || 1;
+    lo -= pad; hi += pad;
+    const X = (i) => M.l + (i / (N - 1)) * (W - M.l - M.r);
+    const Y = (v) => M.t + (1 - (v - lo) / (hi - lo)) * (H - M.t - M.b);
+    ticks(lo, hi, 4).forEach((v) => {
+      svg("line", { x1: M.l, x2: W - M.r, y1: Y(v), y2: Y(v), class: "gridline" }, node);
+      text(node, M.l - 8, Y(v) + 3.5, fmtV(v), "ax", "end");
+    });
+    if (lo < 0 && hi > 0) svg("line", { x1: M.l, x2: W - M.r, y1: Y(0), y2: Y(0), class: "axisline" }, node);
+    [0, Math.floor(N / 2), N - 1].forEach((i) => text(node, X(i), H - 6, i, "ax", "middle"));
+
+    ORDER.slice().reverse().forEach((k) => {
+      const v = get(k);
+      let d = "";
+      const stride = 2;
+      for (let i = 0; i < N; i += stride) d += (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(v[i]).toFixed(1) + " ";
+      d += "L" + X(N - 1).toFixed(1) + " " + Y(v[N - 1]).toFixed(1);
+      svg("path", { d: d, fill: "none", stroke: COLORS[k], "stroke-width": k === "ppo" ? 2.25 : 1.4, "stroke-linejoin": "round", opacity: k === "ppo" ? 1 : 0.85 }, node);
+      text(node, W - M.r + 6, Y(v[N - 1]) + 3.5, fmtV(v[N - 1]), "ax").setAttribute("fill", COLORS[k]);
+    });
+
+    const hoverLine = svg("line", { x1: 0, x2: 0, y1: M.t, y2: H - M.b, stroke: "var(--axis)", "stroke-width": 1, opacity: 0 }, node);
+    const hit = svg("rect", { x: M.l, y: M.t, width: W - M.l - M.r, height: H - M.t - M.b, fill: "transparent" }, node);
+    hit.addEventListener("mousemove", (e) => {
+      const bb = node.getBoundingClientRect();
+      const px = ((e.clientX - bb.left) / bb.width) * W;
+      const i = Math.max(0, Math.min(N - 1, Math.round(((px - M.l) / (W - M.l - M.r)) * (N - 1))));
+      hoverLine.setAttribute("x1", X(i)); hoverLine.setAttribute("x2", X(i)); hoverLine.setAttribute("opacity", 1);
+      showTip(e, "<b>step " + i + "</b><br>" + ORDER.map((k) =>
+        '<span style="color:' + COLORS[k] + '">&#9632;</span> ' + NAMES[k] + " &nbsp;" + fmtV(get(k)[i])).join("<br>"));
+    });
+    hit.addEventListener("mouseleave", () => { hoverLine.setAttribute("opacity", 0); hideTip(); });
+
+    legendNode.innerHTML = ORDER.map((k) => '<span><i class="swatch" style="background:' + COLORS[k] + '"></i>' + NAMES[k] + "</span>").join("");
+  }
+  const invOf = (k) => (k === "ppo" ? T.inventory : D.others[k].inventory);
+  const eqOf = (k) => (k === "ppo" ? T.equity : D.others[k].equity);
+  seriesChart(el("inv-chart"), el("inv-legend"), invOf, "inventory", (v) => Math.round(v));
+  seriesChart(el("eq-chart"), el("eq-legend"), eqOf, "equity", (v) => Math.round(v));
+
+  /* ---------------- aggregate table ---------------- */
+  (function () {
+    const cols = [
+      { k: "final_pnl", h: "PnL", d: 0, better: "max" },
+      { k: "sharpe", h: "Sharpe", d: 1, better: "max" },
+      { k: "max_drawdown", h: "Max DD", d: 0, better: "min" },
+      { k: "mean_abs_inventory", h: "Avg pos", d: 1, better: "min" },
+      { k: "adverse_selection_10", h: "Markout", d: 2, better: "min" },
+      { k: "n_fills", h: "Fills", d: 0, better: null },
+      { k: "win_rate", h: "Win rate", d: 0, better: "max", pct: true },
+    ];
+    const best = {};
+    cols.forEach((c) => {
+      if (!c.better) return;
+      const vals = ORDER.map((k) => AGG[k][c.k]);
+      best[c.k] = c.better === "max" ? Math.max.apply(null, vals) : Math.min.apply(null, vals);
+    });
+    let h = "<thead><tr><th>Policy</th>" + cols.map((c) => "<th>" + c.h + "</th>").join("") + "</tr></thead><tbody>";
+    ORDER.forEach((k) => {
+      h += '<tr class="' + (k === "ppo" ? "is-agent" : "") + '"><td><i class="mark" style="background:' + COLORS[k] + '"></i>' + NAMES[k] + "</td>";
+      cols.forEach((c) => {
+        const v = AGG[k][c.k];
+        const isBest = c.better && Math.abs(v - best[c.k]) < 1e-9;
+        h += '<td class="' + (isBest ? "best" : "") + '">' + (c.pct ? Math.round(v * 100) + "%" : v.toFixed(c.d)) + "</td>";
+      });
+      h += "</tr>";
+    });
+    el("agg-table").innerHTML = h + "</tbody>";
+  })();
+
+  /* ---------------- training charts ---------------- */
+  function trainChart(node, key, color, fmtV) {
+    const W = 560, H = 220, M = { l: 52, r: 14, t: 12, b: 26 };
+    const R = D.training, n = R.length;
+    let lo = Infinity, hi = -Infinity;
+    R.forEach((r) => { lo = Math.min(lo, r[key]); hi = Math.max(hi, r[key]); });
+    const pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad;
+    const X = (i) => M.l + (i / (n - 1)) * (W - M.l - M.r);
+    const Y = (v) => M.t + (1 - (v - lo) / (hi - lo)) * (H - M.t - M.b);
+    ticks(lo, hi, 4).forEach((v) => {
+      svg("line", { x1: M.l, x2: W - M.r, y1: Y(v), y2: Y(v), class: "gridline" }, node);
+      text(node, M.l - 8, Y(v) + 3.5, fmtV(v), "ax", "end");
+    });
+    if (lo < 0 && hi > 0) svg("line", { x1: M.l, x2: W - M.r, y1: Y(0), y2: Y(0), class: "axisline" }, node);
+    let d = "", area = "";
+    R.forEach((r, i) => { d += (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(r[key]).toFixed(1) + " "; });
+    area = "M" + X(0).toFixed(1) + " " + (H - M.b) + " " + d.replace(/^M/, "L");
+    area += "L" + X(n - 1) + " " + (H - M.b) + " L" + X(0) + " " + (H - M.b) + " Z";
+    svg("path", { d: area, fill: color, opacity: 0.12, stroke: "none" }, node);
+    svg("path", { d: d, fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round" }, node);
+    svg("circle", { cx: X(n - 1), cy: Y(R[n - 1][key]), r: 4, fill: color, stroke: "var(--surface)", "stroke-width": 2 }, node);
+    text(node, X(n - 1) - 6, Y(R[n - 1][key]) - 10, fmtV(R[n - 1][key]), "ax", "end").setAttribute("fill", "var(--ink)");
+    [0, Math.floor(n / 2), n - 1].forEach((i) => text(node, X(i), H - 6, (R[i].steps / 1e6).toFixed(1) + "M", "ax", "middle"));
+    svg("line", { x1: M.l, x2: W - M.r, y1: H - M.b, y2: H - M.b, class: "axisline" }, node);
+
+    const hit = svg("rect", { x: M.l, y: M.t, width: W - M.l - M.r, height: H - M.t - M.b, fill: "transparent" }, node);
+    hit.addEventListener("mousemove", (e) => {
+      const bb = node.getBoundingClientRect();
+      const i = Math.max(0, Math.min(n - 1, Math.round((((e.clientX - bb.left) / bb.width) * W - M.l) / (W - M.l - M.r) * (n - 1))));
+      showTip(e, "<b>" + R[i].steps.toLocaleString() + " steps</b><br>reward " + R[i].ret + "<br>avg position " + R[i].inv + "<br>fills " + R[i].trades);
+    });
+    hit.addEventListener("mouseleave", hideTip);
+  }
+  trainChart(el("tr-ret"), "ret", "var(--agent)", (v) => Math.round(v).toLocaleString());
+  trainChart(el("tr-inv"), "inv", "var(--as)", (v) => Math.round(v));
+
+
+  /* ================= multi-agent =================== */
+  const M = D.multi;
+  if (!M || !M.sweep || !M.sweep.length) {
+    ["competition-section", "replay-multi", "league-section"].forEach((id) => {
+      const n = el(id);
+      if (n) n.remove();
+    });
+  } else {
+    // n_agents is an ordered quantity, so it gets a sequential ramp rather than
+    // categorical hues -- darker means a more crowded book.
+    const rampVar = (i, n) => "var(--ramp-" + Math.min(3, Math.round((i / Math.max(1, n - 1)) * 3)) + ")";
+
+    /* ---- sweep bar charts ---- */
+    function sweepChart(node, key, fmtV, decimals) {
+      const W = 320, H = 220, Mg = { l: 46, r: 12, t: 16, b: 40 };
+      const rows = M.sweep, n = rows.length;
+      const vals = rows.map((r) => r[key]);
+      const maxV = Math.max.apply(null, vals) * 1.18;
+      const minV = Math.min(0, Math.min.apply(null, vals) * 1.18);
+      const bw = (W - Mg.l - Mg.r) / n;
+      const Y = (v) => Mg.t + (1 - (v - minV) / (maxV - minV)) * (H - Mg.t - Mg.b);
+      ticks(minV, maxV, 4).forEach((v) => {
+        svg("line", { x1: Mg.l, x2: W - Mg.r, y1: Y(v), y2: Y(v), class: "gridline" }, node);
+        text(node, Mg.l - 7, Y(v) + 3.5, fmtV(v), "ax", "end");
+      });
+      rows.forEach((r, i) => {
+        const v = r[key], y = Math.min(Y(v), Y(0)), h = Math.abs(Y(v) - Y(0));
+        const g = svg("g", {}, node);
+        svg("rect", { x: Mg.l + i * bw + bw * 0.2, y: y, width: bw * 0.6, height: Math.max(1, h), rx: 4, fill: rampVar(i, n) }, g);
+        text(node, Mg.l + i * bw + bw / 2, y - 6, v.toFixed(decimals), "ax", "middle").setAttribute("fill", "var(--ink)");
+        text(node, Mg.l + i * bw + bw / 2, H - Mg.b + 17, r.n_agents + (r.n_agents === 1 ? " maker" : " makers"), "ax", "middle");
+        g.addEventListener("mousemove", (e) => showTip(e, "<b>" + r.n_agents + " maker" + (r.n_agents > 1 ? "s" : "") + "</b><br>half-spread " + r.half_spread.toFixed(2) + "t<br>PnL/maker " + Math.round(r.pnl_per_maker) + "<br>fills/maker " + Math.round(r.fills_per_maker) + "<br>book spread " + r.book_spread.toFixed(2) + "t"));
+        g.addEventListener("mouseleave", hideTip);
+      });
+      svg("line", { x1: Mg.l, x2: W - Mg.r, y1: Y(0), y2: Y(0), class: "axisline" }, node);
+      text(node, (W + Mg.l) / 2, H - 6, "makers sharing the book", "ax", "middle");
+    }
+    sweepChart(el("sw-pnl"), "pnl_per_maker", (v) => Math.round(v), 0);
+    sweepChart(el("sw-total"), "pnl_total", (v) => Math.round(v), 0);
+    sweepChart(el("sw-inv"), "abs_inventory", (v) => v.toFixed(0), 1);
+
+    el("sweep-key").innerHTML = M.sweep.map((r, i) =>
+      '<span><i style="background:' + rampVar(i, M.sweep.length) + '"></i>' + r.n_agents + " maker" + (r.n_agents > 1 ? "s" : "") + "</span>").join("");
+
+    const sc = [
+      { k: "half_spread", h: "Quoted half-spread", d: 2, u: "t" },
+      { k: "book_spread", h: "Book spread", d: 2, u: "t" },
+      { k: "fills_per_maker", h: "Fills / maker", d: 0, u: "" },
+      { k: "pnl_per_maker", h: "PnL / maker", d: 0, u: "" },
+      { k: "pnl_total", h: "PnL, all makers", d: 0, u: "" },
+      { k: "abs_inventory", h: "Avg position", d: 1, u: "" },
+    ];
+    el("sweep-table").innerHTML =
+      "<thead><tr><th>Makers</th>" + sc.map((c) => "<th>" + c.h + "</th>").join("") + "</tr></thead><tbody>" +
+      M.sweep.map((r, i) => '<tr><td><i class="mark" style="background:' + rampVar(i, M.sweep.length) + '"></i>' +
+        r.n_agents + "</td>" + sc.map((c) => "<td>" + r[c.k].toFixed(c.d) + c.u + "</td>").join("") + "</tr>").join("") +
+      "</tbody>";
+
+    const first = M.sweep[0], last = M.sweep[M.sweep.length - 1];
+    const drop = Math.round((1 - last.pnl_per_maker / first.pnl_per_maker) * 100);
+    el("sweep-note").innerHTML =
+      "Profit per maker falls " + drop + "% going from " + first.n_agents + " maker to " + last.n_agents +
+      ", and falls at every step in between &mdash; the robust result here. The quoted half-spread column does " +
+      "<em>not</em> trend cleanly: there is one training seed per table size, and runs land in either a patient " +
+      "wide-quoting mode or an active tight-quoting one, which moves spread and fill count together. Read the spread " +
+      "columns as descriptive of these four runs, not as a measured effect of competition. Averaged over " +
+      M.episodes + " held-out episodes per table size.";
+
+    /* ---- multi-maker replay ---- */
+    const R = M.replay, RN = R.n_steps, NA = R.labels.length;
+    const SHORT = R.labels.map((l) => l.split(/[\s-]+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase());
+    const mFillsByStep = new Map();
+    R.fills.forEach((f) => { if (!mFillsByStep.has(f.step)) mFillsByStep.set(f.step, []); mFillsByStep.get(f.step).push(f); });
+    let mVolMax = 1;
+    for (let i = 0; i < RN; i++) for (let k = 0; k < 5; k++) mVolMax = Math.max(mVolMax, R.book.bid_vol[i][k], R.book.ask_vol[i][k]);
+    mVolMax *= 0.8;
+
+    function mDetail(cur) {
+      const node = el("m-detail"); node.textContent = "";
+      const W = 720, H = 260, Mg = { l: 46, r: 12, t: 10, b: 22 }, WN = 80;
+      const a = Math.max(0, Math.min(cur - 40, RN - WN)), b = Math.min(RN, a + WN);
+      el("m-win-label").textContent = "steps " + a + "–" + (b - 1);
+      let lo = Infinity, hi = -Infinity;
+      for (let i = a; i < b; i++) {
+        lo = Math.min(lo, R.trace.mid[i]); hi = Math.max(hi, R.trace.mid[i]);
+        for (let k = 0; k < NA; k++) {
+          const qb = R.agents[k].quote_bid[i], qa = R.agents[k].quote_ask[i];
+          if (qb > 0) lo = Math.min(lo, qb);
+          if (qa > 0) hi = Math.max(hi, qa);
+        }
+      }
+      const pad = Math.max(1.5, (hi - lo) * 0.12); lo -= pad; hi += pad;
+      const X = (i) => Mg.l + ((i - a) / (WN - 1)) * (W - Mg.l - Mg.r);
+      const Y = (p) => Mg.t + (1 - (p - lo) / (hi - lo)) * (H - Mg.t - Mg.b);
+      ticks(lo, hi, 4).forEach((v) => {
+        svg("line", { x1: Mg.l, x2: W - Mg.r, y1: Y(v), y2: Y(v), class: "gridline" }, node);
+        text(node, Mg.l - 8, Y(v) + 3.5, v.toFixed(1), "ax", "end");
+      });
+      [a, a + 40, b - 1].forEach((i) => text(node, X(i), H - 5, i, "ax", "middle"));
+      // Every maker's quotes share the side colours; identity is the badge.
+      for (let k = 0; k < NA; k++) {
+        [["quote_bid", "var(--buy)"], ["quote_ask", "var(--sell)"]].forEach(([key, col]) => {
+          let d = "", pen = false;
+          for (let i = a; i < b; i++) {
+            const v = R.agents[k][key][i];
+            if (v <= 0) { pen = false; continue; }
+            d += (pen ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1) + " ";
+            pen = true;
+          }
+          svg("path", { d: d, fill: "none", stroke: col, "stroke-width": 1.4, opacity: 0.75, "stroke-linejoin": "round" }, node);
+        });
+      }
+      let d = "";
+      for (let i = a; i < b; i++) d += (i === a ? "M" : "L") + X(i).toFixed(1) + " " + Y(R.trace.mid[i]).toFixed(1) + " ";
+      svg("path", { d: d, fill: "none", stroke: "var(--ink-2)", "stroke-width": 2 }, node);
+      for (let i = a; i < b; i++) {
+        const fs = mFillsByStep.get(i);
+        if (!fs) continue;
+        fs.forEach((f) => svg("circle", { cx: X(i), cy: Y(f.price), r: 3.4, fill: f.qty > 0 ? "var(--buy)" : "var(--sell)", stroke: "var(--surface)", "stroke-width": 1.6 }, node));
+      }
+      svg("line", { x1: X(cur), x2: X(cur), y1: Mg.t, y2: H - Mg.b, stroke: "var(--agent)", "stroke-width": 1.5, "stroke-dasharray": "3 3" }, node);
+      svg("line", { x1: Mg.l, x2: W - Mg.r, y1: H - Mg.b, y2: H - Mg.b, class: "axisline" }, node);
+    }
+
+    function mLadder(i) {
+      const owners = (px, side) => {
+        const key = side === "bid" ? "quote_bid" : "quote_ask";
+        const out = [];
+        for (let k = 0; k < NA; k++) if (R.agents[k][key][i] === px) out.push(k);
+        return out;
+      };
+      const row = (px, vol, side) => {
+        if (px < 0) return '<div class="lad-row"><span class="lad-px">—</span><span class="lad-bar"></span><span class="lad-vol"></span></div>';
+        const who = owners(px, side === "buy" ? "bid" : "ask");
+        const chips = who.length ? '<span class="lad-chips">' + who.map((k) => '<span class="badge' + (k === 0 ? " lead" : "") + '">' + SHORT[k] + "</span>").join("") + "</span>" : "";
+        return '<div class="lad-row' + (who.length ? " you" : "") + '"><span class="lad-px">' + px + chips +
+          '</span><span class="lad-bar"><i style="width:' + Math.min(100, (vol / mVolMax) * 100).toFixed(1) +
+          "%;background:var(--" + side + ')"></i></span><span class="lad-vol">' + vol + "</span></div>";
+      };
+      let h = '<div class="lad-side ask">Asks · sellers</div>';
+      for (let k = 4; k >= 0; k--) h += row(R.book.ask_px[i][k], R.book.ask_vol[i][k], "sell");
+      h += '<div class="lad-gap"><span class="lad-px">' + fmt(R.trace.mid[i]) + '</span><span class="rule"></span><span class="lad-vol">mid</span></div>';
+      for (let k = 0; k < 5; k++) h += row(R.book.bid_px[i][k], R.book.bid_vol[i][k], "buy");
+      h += '<div class="lad-side bid">Bids · buyers</div>';
+      el("m-ladder").innerHTML = h;
+    }
+
+    function mCards(i) {
+      const mid = R.trace.mid[i];
+      el("makers").innerHTML = R.labels.map((lab, k) => {
+        const A = R.agents[k];
+        const qb = A.quote_bid[i], qa = A.quote_ask[i];
+        const nf = R.fills.filter((f) => f.agent === k && f.step <= i).length;
+        return '<div class="maker"><div class="who"><span class="badge' + (k === 0 ? " lead" : "") + '">' + SHORT[k] + "</span>" + lab + "</div>" +
+          '<div class="rows"><span>bid</span><b>' + (qb > 0 ? "−" + (mid - qb).toFixed(1) + "t" : "—") + "</b>" +
+          "<span>ask</span><b>" + (qa > 0 ? "+" + (qa - mid).toFixed(1) + "t" : "—") + "</b>" +
+          "<span>position</span><b>" + sgn(A.inventory[i]) + "</b>" +
+          "<span>PnL</span><b>" + Math.round(A.equity[i]) + "</b>" +
+          "<span>fills</span><b>" + nf + "</b></div></div>";
+      }).join("");
+    }
+
+    let mCur = 0, mTimer = null, mSpeed = 1;
+    el("m-step-max").textContent = RN - 1;
+    el("m-scrub").max = RN - 1;
+    function mGoto(i) {
+      mCur = Math.max(0, Math.min(RN - 1, i | 0));
+      el("m-scrub").value = mCur;
+      el("m-step-n").textContent = mCur;
+      mDetail(mCur); mLadder(mCur); mCards(mCur);
+    }
+    el("m-scrub").addEventListener("input", (e) => { mStop(); mGoto(+e.target.value); });
+    function mStop() { if (mTimer) { clearInterval(mTimer); mTimer = null; el("m-play").textContent = "Play"; } }
+    el("m-play").addEventListener("click", () => {
+      if (mTimer) return mStop();
+      if (mCur >= RN - 1) mGoto(0);
+      el("m-play").textContent = "Pause";
+      mTimer = setInterval(() => { if (mCur >= RN - 1) return mStop(); mGoto(mCur + mSpeed); }, 60);
+    });
+    el("m-speed").addEventListener("click", (e) => {
+      mSpeed = mSpeed === 1 ? 5 : mSpeed === 5 ? 20 : 1;
+      e.target.textContent = mSpeed + "×";
+      e.target.setAttribute("aria-pressed", mSpeed !== 1);
+    });
+    mGoto(R.fills.length ? Math.max(0, R.fills[0].step - 6) : 0);
+
+    /* ---- league ---- */
+    el("lg-eps").textContent = M.episodes;
+    const LG = M.league, LAB = M.league_order;
+    (function () {
+      const node = el("lg-chart"), W = 700, H = 180, Mg = { l: 160, r: 74, t: 10, b: 26 };
+      const vals = LAB.map((l) => LG[l].final_pnl);
+      const lo = Math.min(0, Math.min.apply(null, vals) * 1.15), hi = Math.max.apply(null, vals) * 1.15;
+      const rowH = (H - Mg.t - Mg.b) / LAB.length;
+      const X = (v) => Mg.l + ((v - lo) / (hi - lo)) * (W - Mg.l - Mg.r);
+      ticks(lo, hi, 4).forEach((v) => {
+        svg("line", { x1: X(v), x2: X(v), y1: Mg.t, y2: H - Mg.b, class: "gridline" }, node);
+        text(node, X(v), H - Mg.b + 15, Math.round(v), "ax", "middle");
+      });
+      const best = Math.max.apply(null, vals);
+      LAB.forEach((lab, i) => {
+        const v = LG[lab].final_pnl, y = Mg.t + i * rowH + rowH * 0.2, h = rowH * 0.6;
+        const x0 = Math.min(X(0), X(v)), w = Math.abs(X(v) - X(0));
+        const g = svg("g", {}, node);
+        svg("rect", { x: x0, y: y, width: Math.max(1, w), height: h, rx: 4, fill: v === best ? "var(--agent)" : "var(--base-1)" }, g);
+        text(node, Mg.l - 10, y + h / 2 + 4, lab, "ax", "end").setAttribute("fill", "var(--ink)");
+        text(node, X(v) + (v >= 0 ? 8 : -8), y + h / 2 + 4, Math.round(v), "ax", v >= 0 ? "start" : "end").setAttribute("fill", "var(--ink)");
+        g.addEventListener("mousemove", (e) => showTip(e, "<b>" + lab + "</b><br>PnL " + Math.round(v) + "<br>Sharpe " + LG[lab].sharpe.toFixed(1) + "<br>half-spread " + LG[lab].mean_half_spread.toFixed(2) + "t<br>fills " + Math.round(LG[lab].n_fills)));
+        g.addEventListener("mouseleave", hideTip);
+      });
+      svg("line", { x1: X(0), x2: X(0), y1: Mg.t, y2: H - Mg.b, class: "axisline" }, node);
+      text(node, (W + Mg.l) / 2, H - 4, "profit per episode, sharing one book (ticks × shares)", "ax", "middle");
+    })();
+
+    const lc = [
+      { k: "final_pnl", h: "PnL", d: 0, better: "max" },
+      { k: "sharpe", h: "Sharpe", d: 1, better: "max" },
+      { k: "max_drawdown", h: "Max DD", d: 0, better: "min" },
+      { k: "mean_abs_inventory", h: "Avg pos", d: 1, better: "min" },
+      { k: "mean_half_spread", h: "Half-spread", d: 2, better: null },
+      { k: "n_fills", h: "Fills", d: 0, better: null },
+      { k: "win_rate", h: "Win rate", d: 0, better: "max", pct: true },
+    ];
+    const lbest = {};
+    lc.forEach((c) => {
+      if (!c.better) return;
+      const v = LAB.map((l) => LG[l][c.k]);
+      lbest[c.k] = c.better === "max" ? Math.max.apply(null, v) : Math.min.apply(null, v);
+    });
+    el("lg-table").innerHTML = "<thead><tr><th>Strategy</th>" + lc.map((c) => "<th>" + c.h + "</th>").join("") +
+      "</tr></thead><tbody>" + LAB.map((lab, i) =>
+        '<tr class="' + (i === 0 ? "is-agent" : "") + '"><td><span class="badge' + (i === 0 ? " lead" : "") + '" style="margin-right:8px">' + SHORT[i] + "</span>" + lab + "</td>" +
+        lc.map((c) => {
+          const v = LG[lab][c.k];
+          const isBest = c.better && Math.abs(v - lbest[c.k]) < 1e-9;
+          return '<td class="' + (isBest ? "best" : "") + '">' + (c.pct ? Math.round(v * 100) + "%" : v.toFixed(c.d)) + "</td>";
+        }).join("") + "</tr>").join("") + "</tbody>";
+  }
+
+  /* ---------------- start at a step with something happening ---------------- */
+  goto(fills.length ? Math.max(0, fills[0].step - 6) : 0);
+})();
+</script>

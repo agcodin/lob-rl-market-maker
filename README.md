@@ -10,8 +10,10 @@ cpp/include/lob/      types.hpp  pool.hpp  ring.hpp  book.hpp   # header-only en
 cpp/src/bindings.cpp                                            # pybind11 bridge
 cpp/bench/bench_latency.cpp                                     # tick-to-trade harness
 python/lobrl/         flow.py env.py ppo.py baselines.py metrics.py train.py evaluate.py
-tests/                test_engine.py  test_env.py
-scripts/              bench_python.py  profile_perf.sh
+                      multi_env.py selfplay.py league.py          # multi-agent
+tests/                test_engine.py  test_env.py  test_multi.py
+scripts/              bench_python.py  profile_perf.sh  record_episode.py
+                      record_league.py  build_dashboard.py  competition_sweep.py
 ```
 
 ## Quick start
@@ -21,8 +23,11 @@ make install       # venv + deps + build the extension in place
 make test          # 28 engine/env/metric tests
 make bench         # C++ tick-to-trade latency percentiles
 make bench-py      # bridge throughput + zero-copy verification
-make train         # PPO, 300k env steps (~15 min on a laptop CPU)
+make train         # single-agent PPO, 1.2M steps (~5 min on a laptop CPU)
 make eval          # PPO vs fixed-spread and Avellaneda-Stoikov baselines
+make sweep         # self-play at 1/2/4/8 makers, then the competition table
+make league        # every strategy in one shared order book
+make dashboard     # rebuild the HTML dashboard from fresh runs
 ```
 
 ## 1. Matching engine (C++20)
@@ -122,11 +127,13 @@ A-S formulation.
 
 ## 5. Verification and benchmarking
 
-- `make test` — matching invariants (price-time priority, partial fills,
-  multi-level sweeps, stale-id safety, arena exhaustion, zero-copy event view)
-  and environment invariants (determinism under seed, cash/inventory
+- `make test` — 40 tests: matching invariants (price-time priority, partial
+  fills, multi-level sweeps, stale-id safety, arena exhaustion, zero-copy event
+  view), environment invariants (determinism under seed, cash/inventory
   consistency, quotes never crossing, inventory cap, flow stationarity, Hawkes
-  over-dispersion).
+  over-dispersion), and multi-agent invariants (per-owner fill attribution,
+  seat fairness, tighter quotes winning more fills, GAE across parallel agent
+  streams matching the single-stream reference).
 - `make bench` / `make bench-py` — systems latency and bridge throughput.
 - `scripts/profile_perf.sh` — `perf stat` counters for IPC and cache behaviour.
 - `make eval` — out-of-sample (held-out seed block) annualized Sharpe, maximum
@@ -154,6 +161,62 @@ best heuristic at one seventh its drawdown and one thirteenth its average
 absolute inventory, positive on every held-out seed. Reproduce with
 `make train && make eval`.
 
+## 6. Multi-agent: makers competing in one book
+
+`make sweep` trains a shared policy by self-play at several table sizes, and
+`make league` puts different strategies into the same book at once.
+
+- **Engine** — an order's owner is a `uint8`, so one book attributes fills to
+  255 distinct participants (0 is the background flow). Fill attribution is
+  read straight off the event ring.
+- **`MultiAgentMarketMakingEnv`** — simultaneous moves: every maker quotes
+  against the *same* pre-step mid, and submission order is reshuffled every
+  step. Without that reshuffle whichever agent submits first always wins the
+  queue at a shared price, and the ranking measures list position rather than
+  skill (`test_submission_order_is_the_thing_that_makes_it_fair` demonstrates the
+  bias the flag removes). Observations are byte-for-byte the single-agent
+  layout, which is what lets a solo-trained policy and a self-play policy meet
+  in the same book.
+- **Self-play** — all seats run the same network, so the opposition improves
+  exactly as fast as the policy does. The seats still diverge within an episode:
+  they hold different inventory and sit in different queue positions.
+- **Controlled sweep** — transitions per PPO update are held at 2,048 no matter
+  the table size (`rollout = batch // n_agents`). Without that, a bigger table
+  silently means a bigger gradient batch and the sweep measures batch size
+  rather than competition.
+
+### Head to head, one shared book (12 episodes, seats rotated)
+
+| strategy | PnL | Sharpe | half-spread | fills | avg pos | win rate |
+|---|---|---|---|---|---|---|
+| **Self-play PPO** | 664 | **40.8** | 4.95 | 124 | 8.1 | 100% |
+| Solo-trained PPO | 383 | 23.4 | 6.47 | 40 | 5.7 | 100% |
+| Avellaneda–Stoikov | **794** | 9.4 | 0.66 | 338 | 99.3 | 75% |
+| Fixed 3 ticks | 156 | 4.5 | 3.00 | 11 | 33.8 | 58% |
+
+Training under competition produced a better competitor: head to head, the
+self-play policy beats the solo-trained one on both raw profit (664 vs 383) and
+risk-adjusted return (40.8 vs 23.4). The solo policy quotes wider and takes a
+third of the fills — it never learned that a rival will take the queue.
+Avellaneda–Stoikov again buys the largest raw PnL with inventory it does not
+want (99 shares average, a quarter of the time unprofitable).
+
+### Profit per maker vs table size
+
+| makers | PnL / maker | PnL, all makers | fills / maker | avg pos |
+|---|---|---|---|---|
+| 1 | 971 | 971 | 116 | 11.4 |
+| 2 | 637 | 1275 | 35 | 13.2 |
+| 4 | 594 | 2378 | 112 | 8.9 |
+| 8 | **144** | 1149 | 25 | 5.7 |
+
+Profit per maker falls at every step — 85% from one maker to eight. **The
+quoted-spread column does not trend cleanly and no claim is made about it**:
+there is one training seed per table size, and runs land in either a patient
+wide-quoting mode or an active tight-quoting one, which moves spread and fill
+count together. Separating that from a real effect of competition needs several
+training seeds per size, which has not been run.
+
 ## Notes and limitations
 
 - The engine is single-threaded by design; the arena and the price grid are the
@@ -162,3 +225,11 @@ absolute inventory, positive on every held-out seed. Reproduce with
   incompatible with the universal2 build macOS defaults to.
 - The market is synthetic. Absolute Sharpe numbers describe this simulator, not
   a real venue; the baselines are there so the comparison is like-for-like.
+- Agent quotes are always passive: the placement clamp keeps them from crossing
+  the live book, so makers never take liquidity from one another directly, only
+  compete for the same taker flow.
+- The self-play runs were still improving at 1.2M transitions (reward trend
+  still positive), so the sweep compares four equally-trained but not fully
+  converged policies.
+- `make sweep` trains one seed per table size. The per-maker profit trend is
+  monotonic across all four and survives that; the spread numbers do not.

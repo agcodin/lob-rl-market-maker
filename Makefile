@@ -1,7 +1,7 @@
 PY := .venv/bin/python
 PIP := .venv/bin/pip
 
-.PHONY: venv install bench bench-py test train eval perf clean
+.PHONY: venv install bench bench-py test train eval selfplay sweep league dashboard perf clean
 
 venv:
 	python3 -m venv .venv && $(PIP) install -U pip wheel setuptools
@@ -30,6 +30,27 @@ train:
 
 eval:
 	$(PY) -m lobrl.evaluate --ckpt runs/ppo/policy.pt --episodes 30 --episode-steps 1000
+
+# --- multi-agent ---------------------------------------------------------
+selfplay:
+	$(PY) -m lobrl.selfplay --n-agents 4 --total-steps 300000 --out runs/selfplay_n4
+
+sweep:
+	for n in 1 2 4 8; do \
+	  $(PY) -m lobrl.selfplay --n-agents $$n --total-steps $$((1200000 / $$n)) \
+	        --out runs/selfplay_n$$n; \
+	done
+	$(PY) scripts/competition_sweep.py
+
+league:
+	$(PY) -m lobrl.league --policy ckpt:runs/selfplay_n4/policy.pt@self-play \
+	    --policy ckpt:runs/ppo/policy.pt@solo --policy as --policy fixed:3.0 \
+	    --episodes 20
+
+dashboard:
+	$(PY) scripts/record_episode.py
+	$(PY) scripts/record_league.py
+	$(PY) scripts/build_dashboard.py
 
 perf:
 	./scripts/profile_perf.sh

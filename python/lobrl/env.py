@@ -71,6 +71,8 @@ class MarketMakingEnv(gym.Env):
         self.prev_mid = float(self.cfg.init_mid)
         self.bid_id = 0
         self.ask_id = 0
+        self.quote_bid_px = -1
+        self.quote_ask_px = -1
         self.step_count = 0
         self._last_event_total = 0
         self._mid_hist = np.full(self.cfg.vol_window, float(self.cfg.init_mid))
@@ -149,6 +151,8 @@ class MarketMakingEnv(gym.Env):
         cfg = self.cfg
         size = cfg.quote_size
         best_bid, best_ask = self.book.best_bid(), self.book.best_ask()
+        self.quote_bid_px = -1  # -1 means the side was suppressed this step
+        self.quote_ask_px = -1
 
         # Quote only on the side that reduces (or does not worsen) a maxed-out book.
         if self.inventory < cfg.max_inventory:
@@ -158,12 +162,14 @@ class MarketMakingEnv(gym.Env):
             if px > 0:
                 oid = self.book.limit(Side.BID, px, size, Owner.AGENT)
                 self.bid_id = oid if oid > 0 else 0
+                self.quote_bid_px = px
         if self.inventory > -cfg.max_inventory:
             px = int(round(mid + d_ask))
             if best_bid >= 0:
                 px = max(px, best_bid + 1)
             oid = self.book.limit(Side.ASK, px, size, Owner.AGENT)
             self.ask_id = oid if oid > 0 else 0
+            self.quote_ask_px = px
 
     def _apply_fills(self):
         """Replay new ring records; returns (inventory delta, fill count)."""
@@ -271,4 +277,7 @@ class MarketMakingEnv(gym.Env):
             "trades": self.trade_count,
             "volume": self.volume_traded,
             "spread": self.book.spread(),
+            "quote_bid": self.quote_bid_px,
+            "quote_ask": self.quote_ask_px,
+            "realized": self.realized,
         }

@@ -12,9 +12,12 @@ inline constexpr Idx kNullIdx = -1;
 
 enum Side : std::uint8_t { kBid = 0, kAsk = 1 };
 
-// Owner tag: lets the Python layer separate agent flow from synthetic flow
-// without a side table.
-enum Owner : std::uint8_t { kNoise = 0, kAgent = 1 };
+// Owner tag: identifies who an order belongs to, so fills can be attributed
+// without a side table. 0 is the synthetic background flow; 1..255 are
+// competing agents sharing the same book.
+using OwnerId = std::uint8_t;
+enum Owner : OwnerId { kNoise = 0, kAgent = 1 };
+inline constexpr OwnerId kMaxOwners = 255;
 
 enum EventType : std::int32_t {
     kEvNew     = 0,

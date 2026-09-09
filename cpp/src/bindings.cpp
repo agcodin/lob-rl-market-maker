@@ -57,15 +57,16 @@ PYBIND11_MODULE(_lobcore, m) {
     m.attr("MAX_ORDERS") = py::int_(static_cast<std::int64_t>(kMaxOrders));
     m.attr("RING_SIZE")  = py::int_(static_cast<std::int64_t>(kRingSize));
     m.attr("EVENT_ITEMSIZE") = py::int_(static_cast<std::int64_t>(sizeof(Event)));
+    m.attr("MAX_OWNERS") = py::int_(static_cast<std::int64_t>(kMaxOwners));
 
     py::class_<OrderBook>(m, "OrderBook")
         .def(py::init<>())
         .def("reset", &OrderBook::reset)
         .def("limit", &OrderBook::limit, py::arg("side"), py::arg("price"), py::arg("qty"),
-             py::arg("owner") = kNoise,
+             py::arg("owner") = OwnerId{kNoise},
              "Submit a marketable limit order; returns resting id, 0 if fully filled, -1 on reject.")
         .def("market", &OrderBook::market, py::arg("side"), py::arg("qty"),
-             py::arg("owner") = kNoise)
+             py::arg("owner") = OwnerId{kNoise})
         .def("cancel", &OrderBook::cancel, py::arg("order_id"))
         .def("best_bid", &OrderBook::best_bid)
         .def("best_ask", &OrderBook::best_ask)

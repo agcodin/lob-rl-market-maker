@@ -99,7 +99,7 @@ class OrderBook {
 
     // Marketable limit order. Sweeps the opposing book, rests the remainder.
     // Returns the resting order id, 0 if fully filled, -1 on reject.
-    OrderId limit(Side side, Tick price, Qty qty, Owner owner) {
+    OrderId limit(Side side, Tick price, Qty qty, OwnerId owner) {
         if (qty <= 0 || price < 0 || static_cast<std::size_t>(price) >= kMaxTicks) {
             ++rejects_;
             emit(kEvReject, side, -1, -1, price, qty, owner, owner);
@@ -111,7 +111,7 @@ class OrderBook {
     }
 
     // Pure taker order. Returns filled quantity.
-    Qty market(Side side, Qty qty, Owner owner) {
+    Qty market(Side side, Qty qty, OwnerId owner) {
         if (qty <= 0) return 0;
         Tick limit_price = (side == kBid) ? static_cast<Tick>(kMaxTicks - 1) : 0;
         return qty - sweep(side, limit_price, qty, /*aggressor=*/-1, owner);
@@ -124,7 +124,7 @@ class OrderBook {
         Side s = static_cast<Side>(o.side);
         Tick p = o.price;
         Qty q = o.qty;
-        Owner ow = static_cast<Owner>(o.owner);
+        OwnerId ow = o.owner;
         unlink(s, p, i);
         recycle(i);
         emit(kEvCancel, s, id, -1, p, q, ow, ow);
@@ -174,7 +174,7 @@ class OrderBook {
     const Level& lvl(Side s, Tick p) const { return (s == kBid ? bid_levels_ : ask_levels_)[static_cast<std::size_t>(p)]; }
 
     void emit(EventType t, Side s, OrderId id, OrderId aggr, Tick p, Qty q,
-              Owner owner, Owner aggr_owner) {
+              OwnerId owner, OwnerId aggr_owner) {
         Event e{};
         e.seq = seq_++;
         e.type = t;
@@ -213,7 +213,7 @@ class OrderBook {
         pool_.release(i);
     }
 
-    OrderId rest(Side side, Tick price, Qty qty, Owner owner) {
+    OrderId rest(Side side, Tick price, Qty qty, OwnerId owner) {
         Idx i = pool_.acquire();
         if (i == kNullIdx) {
             ++rejects_;
@@ -244,7 +244,7 @@ class OrderBook {
     }
 
     // Consumes liquidity up to `price`; returns the unfilled remainder.
-    Qty sweep(Side side, Tick price, Qty qty, OrderId aggressor_id, Owner aggr_owner) {
+    Qty sweep(Side side, Tick price, Qty qty, OrderId aggressor_id, OwnerId aggr_owner) {
         Qty remaining = qty;
         if (side == kBid) {
             while (remaining > 0 && has_ask() && best_ask_ <= price) {
@@ -259,7 +259,7 @@ class OrderBook {
     }
 
     Qty consume_level(Side book_side, Tick price, Qty remaining, OrderId aggressor_id,
-                      Owner aggr_owner) {
+                      OwnerId aggr_owner) {
         Level& L = lvl(book_side, price);
         while (remaining > 0 && L.head != kNullIdx) {
             Idx i = L.head;
@@ -271,7 +271,7 @@ class OrderBook {
             last_trade_price_ = price;
             cum_volume_ += traded;
             emit(kEvFill, book_side, make_id(i, o.gen), aggressor_id, price, traded,
-                 static_cast<Owner>(o.owner), aggr_owner);
+                 o.owner, aggr_owner);
             if (o.qty == 0) {
                 L.head = o.next;
                 if (L.head != kNullIdx) pool_[L.head].prev = kNullIdx; else L.tail = kNullIdx;
