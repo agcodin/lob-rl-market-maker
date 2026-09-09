@@ -222,6 +222,19 @@ td.best { color: var(--ink); font-weight: 600; }
 .lad-chips { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: 1px; }
 .lad-chips .badge { width: 16px; height: 14px; font-size: 8.5px; border-radius: 3px; }
 
+/* ---------- arena ---------- */
+.arena-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.verdict { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--hairline);
+           border: 1px solid var(--hairline); border-radius: 10px; overflow: hidden; margin-bottom: 18px; }
+.verdict > div { background: var(--surface); padding: 12px 14px 13px; }
+.verdict .k { font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+.verdict .v { font-family: var(--f-mono); font-size: 21px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.verdict .n { font-size: 11.5px; color: var(--ink-2); }
+.sig { display: inline-block; font-family: var(--f-mono); font-size: 9.5px; letter-spacing: 0.06em;
+       padding: 1px 5px; border-radius: 3px; margin-left: 7px; vertical-align: 1px; border: 1px solid transparent; }
+.sig.yes { background: var(--buy-soft); color: var(--buy); border-color: var(--buy); }
+.sig.no  { background: var(--surface-2); color: var(--muted); border-color: var(--hairline); }
+
 /* ---------- footer ---------- */
 footer { margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--hairline); display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 26px; }
 footer h3 { font-size: 13px; margin: 0 0 8px; font-weight: 600; }
@@ -237,6 +250,8 @@ pre { font-family: var(--f-mono); font-size: 11.5px; background: var(--surface-2
   .readouts { grid-template-columns: repeat(3, 1fr); }
   .sweep-grid { grid-template-columns: 1fr; }
   .makers { grid-template-columns: repeat(2, 1fr); }
+  .arena-grid { grid-template-columns: 1fr; }
+  .verdict { grid-template-columns: repeat(2, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -452,6 +467,53 @@ pre { font-family: var(--f-mono); font-size: 11.5px; background: var(--surface-2
       <div class="tbl-scroll" style="margin-top:16px"><table id="lg-table"></table></div>
       <p class="tbl-note">Same columns as the solo table, but every number here was earned against the other three
       rather than in a private market.</p>
+    </div>
+  </section>
+
+  <section id="arena-section">
+    <div class="sec-head">
+      <h2>An overnight run that made it worse, and the one number that fixed it</h2>
+      <p>The agents were left to train unattended for six hours against a growing pool of their own past
+      selves. It went backwards. What follows is the diagnosis and the controlled test that repaired it.</p>
+    </div>
+
+    <div class="verdict" id="arena-verdict"></div>
+
+    <div class="panel panel-pad">
+      <div class="arena-grid">
+        <div>
+          <div class="panel-title"><h3>Risk-adjusted return through the night</h3><span class="sub">Sharpe</span></div>
+          <svg id="ov-sharpe" viewBox="0 0 460 220" role="img" aria-label="Sharpe ratio falling across the overnight run"></svg>
+        </div>
+        <div>
+          <div class="panel-title"><h3>Position it carried</h3><span class="sub">|shares|</span></div>
+          <svg id="ov-inv" viewBox="0 0 460 220" role="img" aria-label="Average position rising across the overnight run"></svg>
+        </div>
+      </div>
+      <p class="tbl-note" id="ov-note"></p>
+    </div>
+
+    <div class="panel panel-pad" style="margin-top:16px">
+      <div class="panel-title">
+        <h3>Four interventions, each tested for ten minutes</h3>
+        <span class="sub">Sharpe gain vs the previous champion</span>
+      </div>
+      <svg id="arm-chart" viewBox="0 0 700 250" role="img" aria-label="Sharpe gain of each intervention with standard error bars"></svg>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--agent)"></i>significant improvement</span>
+        <span><i class="swatch" style="background:var(--base-1)"></i>indistinguishable from no change</span>
+        <span>bars show &plusmn;1 standard error over paired episodes</span>
+      </div>
+      <div class="tbl-scroll" style="margin-top:16px"><table id="arm-table"></table></div>
+      <p class="tbl-note">Each arm is compared in <em>paired</em> episodes: both policies quote into the same book
+      on the same seed, seats alternating, so the shared market noise cancels. Arm C — the learner taking every
+      seat, which is closest to plain self-play — is the control: it received the same extra transitions as the
+      others and produced nothing, so the gain is not simply more training.</p>
+    </div>
+
+    <div class="panel panel-pad" style="margin-top:16px">
+      <div class="panel-title"><h3>Where that leaves everything</h3><span class="sub" id="st-eps"></span></div>
+      <div class="tbl-scroll"><table id="st-table"></table></div>
     </div>
   </section>
 
@@ -1052,6 +1114,145 @@ make eval          # this comparison table</pre>
         lc.map((c) => {
           const v = LG[lab][c.k];
           const isBest = c.better && Math.abs(v - lbest[c.k]) < 1e-9;
+          return '<td class="' + (isBest ? "best" : "") + '">' + (c.pct ? Math.round(v * 100) + "%" : v.toFixed(c.d)) + "</td>";
+        }).join("") + "</tr>").join("") + "</tbody>";
+  }
+
+
+  /* ================= arena: the overnight failure and the fix ============ */
+  const AR = D.arena;
+  if (!AR || !AR.arms) {
+    const n = el("arena-section");
+    if (n) n.remove();
+  } else {
+    const OV = AR.overnight;
+    if (OV) {
+      el("arena-verdict").innerHTML = [
+        { k: "Compute spent", v: (OV.transitions / 1e6).toFixed(0) + "M", n: "transitions over " + OV.hours.toFixed(1) + " h" },
+        { k: "Sharpe", v: OV.windows[0].sharpe.toFixed(1) + " → " + OV.windows[OV.windows.length - 1].sharpe.toFixed(1), n: "it got worse, not better" },
+        { k: "Position carried", v: OV.windows[0].inv.toFixed(0) + " → " + OV.windows[OV.windows.length - 1].inv.toFixed(0), n: "drifted into inventory gambling" },
+        { k: "Net gain", v: "none", n: OV.generations + " generations, all discarded" },
+      ].map((t) => '<div><span class="k">' + t.k + '</span><div class="v">' + t.v + '</div><span class="n">' + t.n + "</span></div>").join("");
+    }
+
+    // Two separate charts rather than one with two y-scales.
+    function overnightChart(node, key, color, fmtV, label) {
+      if (!OV) return;
+      const W = 460, H = 220, Mg = { l: 46, r: 16, t: 14, b: 30 };
+      const rows = OV.windows, n = rows.length;
+      const vals = rows.map((r) => r[key]);
+      let lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+      const pad = (hi - lo) * 0.15 || 1; lo = Math.min(0, lo - pad); hi += pad;
+      const X = (i) => Mg.l + (i / (n - 1)) * (W - Mg.l - Mg.r);
+      const Y = (v) => Mg.t + (1 - (v - lo) / (hi - lo)) * (H - Mg.t - Mg.b);
+      ticks(lo, hi, 4).forEach((v) => {
+        svg("line", { x1: Mg.l, x2: W - Mg.r, y1: Y(v), y2: Y(v), class: "gridline" }, node);
+        text(node, Mg.l - 8, Y(v) + 3.5, fmtV(v), "ax", "end");
+      });
+      let d = "", area = "";
+      rows.forEach((r, i) => { d += (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(r[key]).toFixed(1) + " "; });
+      area = "M" + X(0).toFixed(1) + " " + (H - Mg.b) + " " + d.replace(/^M/, "L") +
+             "L" + X(n - 1).toFixed(1) + " " + (H - Mg.b) + " Z";
+      svg("path", { d: area, fill: color, opacity: 0.12 }, node);
+      svg("path", { d: d, fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round" }, node);
+      rows.forEach((r, i) => {
+        const g = svg("g", {}, node);
+        svg("circle", { cx: X(i), cy: Y(r[key]), r: 3.2, fill: color, stroke: "var(--surface)", "stroke-width": 1.6 }, g);
+        g.addEventListener("mousemove", (e) => showTip(e, "<b>generation " + r.gen + "</b><br>Sharpe " + r.sharpe.toFixed(1) + "<br>position " + r.inv.toFixed(1) + "<br>PnL " + r.pnl));
+        g.addEventListener("mouseleave", hideTip);
+      });
+      text(node, X(0), Y(rows[0][key]) - 11, fmtV(rows[0][key]), "ax", "middle").setAttribute("fill", "var(--ink)");
+      text(node, X(n - 1), Y(rows[n - 1][key]) - 11, fmtV(rows[n - 1][key]), "ax", "middle").setAttribute("fill", "var(--ink)");
+      svg("line", { x1: Mg.l, x2: W - Mg.r, y1: H - Mg.b, y2: H - Mg.b, class: "axisline" }, node);
+      [0, Math.floor(n / 2), n - 1].forEach((i) => text(node, X(i), H - 12, "gen " + rows[i].gen, "ax", "middle"));
+      text(node, (W + Mg.l) / 2, H - 1, label, "ax", "middle");
+    }
+    overnightChart(el("ov-sharpe"), "sharpe", "var(--sell)", (v) => v.toFixed(0), "six hours of unattended training");
+    overnightChart(el("ov-inv"), "inv", "var(--sell)", (v) => v.toFixed(0), "six hours of unattended training");
+
+    if (OV) {
+      el("ov-note").innerHTML =
+        "The promotion gate scored candidates on raw profit. Across those " + OV.generations +
+        " generations profit barely tracked position size (correlation " + OV.corr_inv_pnl.toFixed(2) +
+        ") while Sharpe strongly opposed it (" + OV.corr_inv_sharpe.toFixed(2) +
+        "), so the gate could not see the policy drifting and certified every drifted step as an improvement. " +
+        "Fixing the gate alone then produced zero promotions in seventeen generations: selection cannot repair a " +
+        "training problem. The cause was one inherited constant — the inventory penalty, four times too small for this setting.";
+    }
+
+    /* ---- interventions, with error bars ---- */
+    (function () {
+      const node = el("arm-chart"), W = 700, H = 250, Mg = { l: 210, r: 90, t: 14, b: 40 };
+      const rows = AR.arms;
+      const lo = Math.min(0, ...rows.map((r) => r.delta - r.stderr * 1.2));
+      const hi = Math.max(...rows.map((r) => r.delta + r.stderr * 1.2));
+      const rowH = (H - Mg.t - Mg.b) / rows.length;
+      const X = (v) => Mg.l + ((v - lo) / (hi - lo)) * (W - Mg.l - Mg.r);
+      ticks(lo, hi, 5).forEach((v) => {
+        svg("line", { x1: X(v), x2: X(v), y1: Mg.t, y2: H - Mg.b, class: "gridline" }, node);
+        text(node, X(v), H - Mg.b + 16, v.toFixed(0), "ax", "middle");
+      });
+      rows.forEach((r, i) => {
+        const sig = Math.abs(r.t) >= 2 && r.delta > 0;
+        const col = sig ? "var(--agent)" : "var(--base-1)";
+        const y = Mg.t + i * rowH + rowH * 0.28, h = rowH * 0.34;
+        const x0 = Math.min(X(0), X(r.delta)), w = Math.abs(X(r.delta) - X(0));
+        const g = svg("g", {}, node);
+        svg("rect", { x: x0, y: y, width: Math.max(1, w), height: h, rx: 4, fill: col }, g);
+        // +/-1 standard error
+        const cy = y + h / 2, e0 = X(r.delta - r.stderr), e1 = X(r.delta + r.stderr);
+        svg("line", { x1: e0, x2: e1, y1: cy, y2: cy, stroke: "var(--ink)", "stroke-width": 1.5, opacity: 0.75 }, g);
+        [e0, e1].forEach((x) => svg("line", { x1: x, x2: x, y1: cy - 4, y2: cy + 4, stroke: "var(--ink)", "stroke-width": 1.5, opacity: 0.75 }, g));
+        text(node, Mg.l - 12, cy + 4, r.arm + " · " + r.change, "ax", "end").setAttribute("fill", "var(--ink)");
+        text(node, X(r.delta) + (r.delta >= 0 ? 12 : -12), cy + 4,
+             (r.delta >= 0 ? "+" : "") + r.delta.toFixed(1), "ax", r.delta >= 0 ? "start" : "end")
+          .setAttribute("fill", "var(--ink)");
+        g.addEventListener("mousemove", (e) => showTip(e, "<b>arm " + r.arm + "</b><br>" + r.change +
+          "<br>Sharpe gain " + r.delta.toFixed(2) + " &plusmn; " + r.stderr.toFixed(2) +
+          "<br>t = " + r.t.toFixed(2) + "<br>position " + r.abs_inventory.toFixed(1) +
+          "<br>" + r.episodes + " paired episodes"));
+        g.addEventListener("mouseleave", hideTip);
+      });
+      svg("line", { x1: X(0), x2: X(0), y1: Mg.t, y2: H - Mg.b, class: "axisline" }, node);
+      text(node, (W + Mg.l) / 2, H - 6, "change in Sharpe vs the previous champion", "ax", "middle");
+    })();
+
+    el("arm-table").innerHTML =
+      "<thead><tr><th>Arm</th><th>Change</th><th>Sharpe gain</th><th>Std error</th><th>t</th>" +
+      "<th>Avg pos</th><th>PnL</th><th>Verdict</th></tr></thead><tbody>" +
+      AR.arms.map((r) => {
+        const sig = Math.abs(r.t) >= 2 && r.delta > 0;
+        return '<tr class="' + (sig ? "is-agent" : "") + '"><td>' + r.arm + "</td><td>" + r.change +
+          '</td><td class="' + (sig ? "best" : "") + '">' + (r.delta >= 0 ? "+" : "") + r.delta.toFixed(2) +
+          "</td><td>" + r.stderr.toFixed(2) + "</td><td>" + r.t.toFixed(2) + "</td><td>" +
+          r.abs_inventory.toFixed(1) + "</td><td>" + r.pnl.toFixed(0) + '</td><td><span class="sig ' +
+          (sig ? "yes" : "no") + '">' + (sig ? "real" : "noise") + "</span></td></tr>";
+      }).join("") + "</tbody>";
+
+    /* ---- current standings ---- */
+    el("st-eps").textContent = AR.episodes + " shared-book episodes";
+    const SO = AR.standings_order, ST = AR.standings;
+    const sc = [
+      { k: "final_pnl", h: "PnL", d: 0, better: "max" },
+      { k: "sharpe", h: "Sharpe", d: 1, better: "max" },
+      { k: "max_drawdown", h: "Max DD", d: 0, better: "min" },
+      { k: "mean_abs_inventory", h: "Avg pos", d: 1, better: "min" },
+      { k: "adverse_selection_10", h: "Markout", d: 2, better: "min" },
+      { k: "n_fills", h: "Fills", d: 0, better: null },
+      { k: "win_rate", h: "Win rate", d: 0, better: "max", pct: true },
+    ];
+    const sbest = {};
+    sc.forEach((c) => {
+      if (!c.better) return;
+      const v = SO.map((l) => ST[l][c.k]);
+      sbest[c.k] = c.better === "max" ? Math.max.apply(null, v) : Math.min.apply(null, v);
+    });
+    el("st-table").innerHTML = "<thead><tr><th>Strategy</th>" + sc.map((c) => "<th>" + c.h + "</th>").join("") +
+      "</tr></thead><tbody>" + SO.map((lab, i) =>
+        '<tr class="' + (i === 0 ? "is-agent" : "") + '"><td>' + lab + "</td>" +
+        sc.map((c) => {
+          const v = ST[lab][c.k];
+          const isBest = c.better && Math.abs(v - sbest[c.k]) < 1e-9;
           return '<td class="' + (isBest ? "best" : "") + '">' + (c.pct ? Math.round(v * 100) + "%" : v.toFixed(c.d)) + "</td>";
         }).join("") + "</tr>").join("") + "</tbody>";
   }

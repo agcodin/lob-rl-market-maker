@@ -108,16 +108,15 @@ def main():
 
     # --- 2. league: four different policies, one book, rotating seats ---
     roster, labels = [], []
-    if Path("runs/selfplay_n4/policy.pt").exists():
-        roster.append(LoadedPolicy("runs/selfplay_n4/policy.pt", label="Self-play PPO"))
-        labels.append("Self-play PPO")
-    if Path("runs/ppo/policy.pt").exists():
-        roster.append(LoadedPolicy("runs/ppo/policy.pt", label="Solo-trained PPO"))
-        labels.append("Solo-trained PPO")
+    for path, name in [("runs/champion.pt", "Arena champion"),
+                       ("runs/selfplay_n4/policy.pt", "Self-play PPO"),
+                       ("runs/ppo/policy.pt", "Solo-trained PPO")]:
+        if Path(path).exists():
+            roster.append(LoadedPolicy(path, label=name))
+            labels.append(name)
     asp = AvellanedaStoikovPolicy(gamma=0.05, k=1.5); asp.label = "Avellaneda-Stoikov"
-    fx = FixedSpreadPolicy(3.0); fx.label = "Fixed 3 ticks"
-    roster += [asp, fx]
-    labels += ["Avellaneda-Stoikov", "Fixed 3 ticks"]
+    roster.append(asp)
+    labels.append("Avellaneda-Stoikov")
 
     n = len(roster)
     keys = ["final_pnl", "sharpe", "max_drawdown", "adverse_selection_10",

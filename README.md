@@ -3,7 +3,12 @@
 A deterministic, zero-heap-allocation limit order book matching engine in C++20,
 bound to Python through `pybind11` over contiguous NumPy buffers, plus a PPO
 market maker trained against synthetic microstructure flow with an
-inventory-penalized Avellaneda–Stoikov reward.
+inventory-penalized Avellaneda–Stoikov reward, and a multi-agent league where
+several makers compete for the same order flow.
+
+**Headline numbers** — 4–7 ns per order-book operation (p50), and a learned
+market maker that beats the closed-form Avellaneda–Stoikov quoter by 7.7x on
+risk-adjusted return while carrying a ninth of the inventory.
 
 ```
 cpp/include/lob/      types.hpp  pool.hpp  ring.hpp  book.hpp   # header-only engine
