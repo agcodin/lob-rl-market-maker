@@ -23,6 +23,14 @@ class PPOConfig:
     max_grad_norm: float = 0.5
     init_log_std: float = -0.5
     target_kl: float | None = 0.03
+    # Auxiliary prediction task. The tape genuinely predicts the forward mid
+    # move, but the reward gradient toward using it is tiny -- the benefit is
+    # indirect (predict price -> skew quotes -> avoid an adverse fill), so it is
+    # swamped by return variance and the input weights stay near zero. A
+    # supervised head on the actor trunk forces the representation to carry the
+    # signal, and the policy layer can then use it for free.
+    aux_coef: float = 0.25
+    aux_horizon: int = 10
 
 
 class RunningNorm:
@@ -70,14 +78,28 @@ class ActorCritic(nn.Module):
         self.actor = _mlp(obs_dim, cfg.hidden, act_dim)
         self.critic = _mlp(obs_dim, cfg.hidden, 1)
         self.log_std = nn.Parameter(torch.full((act_dim,), cfg.init_log_std))
+        # Reads the actor trunk and predicts the forward mid move.
+        self.aux = nn.Linear(cfg.hidden, 1)
+        nn.init.orthogonal_(self.aux.weight, gain=0.1)
+        nn.init.zeros_(self.aux.bias)
         # Small final-layer gain keeps the initial policy near the action-space centre.
         for head in (self.actor, self.critic):
             nn.init.orthogonal_(head[-1].weight, gain=0.01)
             nn.init.zeros_(head[-1].bias)
 
+    def features(self, obs: torch.Tensor) -> torch.Tensor:
+        """Actor trunk output, shared by the policy head and the aux head."""
+        h = obs
+        for layer in self.actor[:-1]:
+            h = layer(h)
+        return h
+
     def dist(self, obs: torch.Tensor) -> torch.distributions.Normal:
-        mu = self.actor(obs)
+        mu = self.actor[-1](self.features(obs))
         return torch.distributions.Normal(mu, self.log_std.exp())
+
+    def predict(self, obs: torch.Tensor) -> torch.Tensor:
+        return self.aux(self.features(obs)).squeeze(-1)
 
     def act(self, obs: torch.Tensor, deterministic: bool = False):
         d = self.dist(obs)
@@ -85,8 +107,10 @@ class ActorCritic(nn.Module):
         return a, d.log_prob(a).sum(-1), self.critic(obs).squeeze(-1)
 
     def evaluate(self, obs: torch.Tensor, act: torch.Tensor):
-        d = self.dist(obs)
-        return d.log_prob(act).sum(-1), d.entropy().sum(-1), self.critic(obs).squeeze(-1)
+        feat = self.features(obs)
+        d = torch.distributions.Normal(self.actor[-1](feat), self.log_std.exp())
+        return (d.log_prob(act).sum(-1), d.entropy().sum(-1),
+                self.critic(obs).squeeze(-1), self.aux(feat).squeeze(-1))
 
 
 class RolloutBuffer:
@@ -133,7 +157,7 @@ class PPOTrainer:
         self.net = ActorCritic(obs_dim, act_dim, self.cfg).to(self.device)
         self.opt = torch.optim.Adam(self.net.parameters(), lr=self.cfg.lr, eps=1e-5)
 
-    def update(self, buf: RolloutBuffer, last_val: float) -> dict:
+    def update(self, buf, last_val, aux_target=None, aux_mask=None) -> dict:
         cfg = self.cfg
         adv, ret = buf.compute_gae(last_val, cfg.gamma, cfg.gae_lambda)
         n = buf.ptr
@@ -143,14 +167,19 @@ class PPOTrainer:
         adv_t = torch.as_tensor(adv, device=self.device)
         adv_t = (adv_t - adv_t.mean()) / (adv_t.std() + 1e-8)
         ret_t = torch.as_tensor(ret, device=self.device)
+        has_aux = aux_target is not None and cfg.aux_coef > 0
+        if has_aux:
+            aux_t = torch.as_tensor(np.asarray(aux_target, np.float32), device=self.device)
+            aux_m = torch.as_tensor(np.asarray(
+                aux_mask if aux_mask is not None else np.ones(n), np.float32), device=self.device)
 
-        stats = {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "kl": 0.0}
+        stats = {"policy_loss": 0.0, "value_loss": 0.0, "entropy": 0.0, "kl": 0.0, "aux_loss": 0.0}
         batches = 0
         for _ in range(cfg.epochs):
             idx = torch.randperm(n, device=self.device)
             for start in range(0, n, cfg.minibatch):
                 b = idx[start:start + cfg.minibatch]
-                logp, ent, val = self.net.evaluate(obs[b], act[b])
+                logp, ent, val, aux = self.net.evaluate(obs[b], act[b])
                 ratio = (logp - old_logp[b]).exp()
                 p_loss = -torch.min(
                     ratio * adv_t[b],
@@ -158,6 +187,12 @@ class PPOTrainer:
                 ).mean()
                 v_loss = ((val - ret_t[b]) ** 2).mean()
                 loss = p_loss + cfg.value_coef * v_loss - cfg.entropy_coef * ent.mean()
+                if has_aux:
+                    m = aux_m[b]
+                    denom = m.sum().clamp(min=1.0)
+                    a_loss = (((aux - aux_t[b]) ** 2) * m).sum() / denom
+                    loss = loss + cfg.aux_coef * a_loss
+                    stats["aux_loss"] += a_loss.item()
 
                 self.opt.zero_grad(set_to_none=True)
                 loss.backward()

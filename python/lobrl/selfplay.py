@@ -32,14 +32,41 @@ class MultiRolloutBuffer:
         self.rew = np.zeros((size, n_agents), np.float32)
         self.val = np.zeros((size, n_agents), np.float32)
         self.done = np.zeros((size, n_agents), np.float32)
+        self.mid = np.zeros(size, np.float64)
+        self.gap = np.zeros(size, np.float64)
         self.t = 0
         self.ptr = 0
 
-    def add(self, obs, act, logp, rew, val, done):
+    def add(self, obs, act, logp, rew, val, done, mid=0.0, gap=0.0):
         i = self.t
         self.obs[i], self.act[i], self.logp[i] = obs, act, logp
         self.rew[i], self.val[i], self.done[i] = rew, val, done
+        self.mid[i] = mid
+        self.gap[i] = gap
         self.t += 1
+
+    def aux_targets(self, horizon: int, scale: float = 5.0, target: str = "gap"):
+        """Supervised label for the auxiliary head.
+
+        "gap" is the latent fundamental minus the mid -- a persistent state that
+        an oracle probe showed is worth +24 Sharpe, and which is 3.5x more
+        predictable from the observation than the forward return ("fwd") the
+        head originally targeted. It is contemporaneous, so unlike a forward
+        return it needs no lookahead and no episode-boundary masking.
+        """
+        T, n = self.t, self.n
+        if target == "gap":
+            tgt = np.repeat((self.gap[:T] / scale)[:, None], n, axis=1).astype(np.float32)
+            return tgt.reshape(T * n), np.ones(T * n, np.float32)
+        tgt = np.zeros((T, n), np.float32)
+        mask = np.zeros((T, n), np.float32)
+        ends = self.done[:T, 0] > 0.5
+        for t in range(T - horizon):
+            if ends[t:t + horizon].any():
+                continue
+            tgt[t, :] = (self.mid[t + horizon] - self.mid[t]) / scale
+            mask[t, :] = 1.0
+        return tgt.reshape(T * n), mask.reshape(T * n)
 
     def full(self) -> bool:
         return self.t >= self.T

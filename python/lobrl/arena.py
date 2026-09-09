@@ -75,6 +75,8 @@ class ArenaConfig:
     flow_features: bool = False
     informed_frac: float = 0.0
     fundamental_vol: float = 0.0
+    aux_coef: float = 2.0        # weight on the auxiliary supervised loss
+    aux_target: str = "gap"      # "gap" (latent fundamental) or "fwd" (return)
     hidden: int = 128
     seed: int = 0
 
@@ -85,7 +87,8 @@ class FrozenPolicy:
     def __init__(self, net_state, norm_state, obs_dim, act_dim, label):
         hidden = net_state["actor.0.weight"].shape[0]
         self.net = ActorCritic(obs_dim, act_dim, PPOConfig(hidden=hidden))
-        self.net.load_state_dict(net_state)
+        # Older checkpoints predate the auxiliary head; its fresh init is fine.
+        self.net.load_state_dict(net_state, strict=False)
         self.net.eval()
         self.norm = RunningNorm(obs_dim)
         self.norm.load_state_dict(norm_state)
@@ -240,7 +243,8 @@ class Arena:
         self.obs_dim = probe.observation_space.shape[0]
         self.act_dim = probe.action_space.shape[0]
 
-        self.trainer = PPOTrainer(self.obs_dim, self.act_dim, PPOConfig(hidden=cfg.hidden))
+        self.trainer = PPOTrainer(self.obs_dim, self.act_dim,
+                                  PPOConfig(hidden=cfg.hidden, aux_coef=cfg.aux_coef))
         self.norm = RunningNorm(self.obs_dim)
         self.heuristics = make_heuristics()
         self.gen = 0
@@ -255,7 +259,7 @@ class Arena:
         state = self.dir / "state.json"
         if best.exists():
             b = torch.load(best, map_location="cpu", weights_only=False)
-            self.trainer.net.load_state_dict(b["model"])
+            self.trainer.net.load_state_dict(b["model"], strict=False)
             self.norm.load_state_dict(b["norm"])
             print(f"resumed learner from {best}")
         if state.exists():
@@ -375,7 +379,8 @@ class Arena:
                     acts[i, :len(oa)] = oa
                 nxt, rew, term, trunc, info = env.step(acts)
                 buf.add(nobs, acts[:L], logp.numpy(), rew[:L], v.numpy(),
-                        np.full(L, 1.0 if trunc else 0.0, np.float32))
+                        np.full(L, 1.0 if trunc else 0.0, np.float32), mid=info["mid"],
+                        gap=info.get("fundamental_gap", 0.0))
                 ep_ret += rew[:L]
                 obs = nxt
                 if trunc:
@@ -396,7 +401,9 @@ class Arena:
             with torch.no_grad():
                 last_val = self.trainer.net.critic(
                     torch.as_tensor(self.norm(obs[:L]))).squeeze(-1).numpy()
-            stats = self.trainer.update(buf, last_val)
+            aux_t, aux_m = buf.aux_targets(self.trainer.cfg.aux_horizon,
+                                           target=self.cfg.aux_target)
+            stats = self.trainer.update(buf, last_val, aux_target=aux_t, aux_mask=aux_m)
             done_transitions += rollout * L
             self.transitions += rollout * L
             if time.time() > self.deadline:
@@ -528,6 +535,9 @@ def main():
                     help="what a candidate must beat the incumbent on")
     ap.add_argument("--patience", type=int, default=8,
                     help="failed generations before reverting the learner to best.pt")
+    ap.add_argument("--aux-target", choices=["gap", "fwd"], default="gap")
+    ap.add_argument("--aux-coef", type=float, default=2.0,
+                    help="weight on the auxiliary forward-price prediction loss")
     ap.add_argument("--flow-features", action="store_true",
                     help="add tape features to the observation")
     ap.add_argument("--informed-frac", type=float, default=0.0,
@@ -550,7 +560,8 @@ def main():
                       variable_size=args.variable_size, hidden=args.hidden,
                       flow_features=args.flow_features,
                       informed_frac=args.informed_frac,
-                      fundamental_vol=args.fundamental_vol)
+                      fundamental_vol=args.fundamental_vol, aux_coef=args.aux_coef,
+                      aux_target=args.aux_target)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))

@@ -366,6 +366,10 @@ class MultiAgentMarketMakingEnv:
             "trades": self.trade_count.copy(),
             "volume": self.volume_traded.copy(),
             "spread": self.book.spread(),
+            # Training-time-only label: never enters the observation, only the
+            # auxiliary supervised head. The policy still trades on what it can
+            # actually see.
+            "fundamental_gap": float(self.flow.fundamental - mid) if self.cfg.flow.fundamental_vol > 0 else 0.0,
             "quote_bid": self.quote_bid_px.copy(),
             "quote_ask": self.quote_ask_px.copy(),
         }
