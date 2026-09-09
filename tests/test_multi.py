@@ -165,3 +165,32 @@ def test_pool_pruning_actually_caps_the_pool(tmp_path):
     kept = sorted(p.name for p in tmp_path.glob("gen_*.pt"))
     assert kept[-1] == "gen_0139.pt"          # newest always survives
     assert len(kept) >= cfg.pool_recent
+
+
+def test_best_checkpoint_is_the_champion_not_the_last_learner(tmp_path):
+    """A finished run must not overwrite best.pt with an unpromoted learner."""
+    import torch
+
+    from lobrl.arena import Arena, ArenaConfig, FrozenPolicy
+    from lobrl.ppo import ActorCritic, PPOConfig, RunningNorm
+
+    cfg = ArenaConfig(n_agents=2, episode_steps=100)
+    a = Arena.__new__(Arena)
+    a.cfg, a.dir, a.gen = cfg, tmp_path, 5
+    a.obs_dim, a.act_dim = 28, 2
+
+    champion = FrozenPolicy(ActorCritic(28, 2, PPOConfig()).state_dict(),
+                            RunningNorm(28).state_dict(), 28, 2, "champ")
+    drifted = ActorCritic(28, 2, PPOConfig())
+    with torch.no_grad():                      # make the learner clearly different
+        for p in drifted.parameters():
+            p.add_(1.0)
+
+    class _T:
+        net = drifted
+    a.trainer, a.norm = _T(), RunningNorm(28)
+
+    a._save_best(champion)
+    saved = torch.load(tmp_path / "best.pt", map_location="cpu", weights_only=False)["model"]
+    ref = champion.net.state_dict()
+    assert all(torch.equal(saved[k], ref[k]) for k in ref)

@@ -232,8 +232,13 @@ class Arena:
         if hist.exists():
             self.history = [json.loads(l) for l in hist.read_text().splitlines() if l.strip()]
 
-    def _save_best(self):
-        torch.save({"model": self.trainer.net.state_dict(), "norm": self.norm.state_dict(),
+    def _save_best(self, policy: "FrozenPolicy | None" = None):
+        """Write `best.pt`. Pass the incumbent explicitly when the live learner
+        is not the champion -- at the end of a run the learner has usually moved
+        past the last promoted policy, and saving it would discard the ratchet."""
+        net = policy.net if policy is not None else self.trainer.net
+        norm = policy.norm if policy is not None else self.norm
+        torch.save({"model": net.state_dict(), "norm": norm.state_dict(),
                     "obs_dim": self.obs_dim, "act_dim": self.act_dim,
                     "n_agents": self.cfg.n_agents, "generation": self.gen},
                    self.dir / "best.pt")
@@ -465,7 +470,9 @@ class Arena:
                   f"| pool {row['pool_size']} "
                   f"| {(self.deadline - time.time())/3600:4.2f}h left", flush=True)
 
-        self._save_best()
+        # The champion is the last policy that actually won its match, not
+        # wherever the learner happened to stop.
+        self._save_best(incumbent)
         self._write_status({"phase": "finished"})
         print(f"\nfinished: {self.gen} generations, {self.transitions:,} transitions, "
               f"{sum(1 for h in self.history if h['promoted'])} promotions, "
