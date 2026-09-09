@@ -49,7 +49,16 @@ class ArenaConfig:
     p_baseline: float = 0.15           # opponent seat is a heuristic quoter
     pool_recent: int = 6               # bias sampling toward recent snapshots
     pool_max: int = 60
-    promote_margin: float = 0.0        # PnL the candidate must beat by
+    # Promote on risk-adjusted return, not raw PnL. Raw PnL is nearly blind to
+    # inventory (measured +0.16 correlation) while Sharpe strongly penalises it
+    # (-0.58), so a PnL gate lets a policy drift into inventory gambling and
+    # still certify each drifted step as an "improvement".
+    promote_metric: str = "sharpe"     # "sharpe" | "pnl"
+    promote_margin: float = 0.0
+    # Hard guardrail for an unattended run: never promote a candidate carrying
+    # far more inventory than the incumbent, whatever its score says.
+    max_inventory_ratio: float = 1.35
+    max_abs_inventory: float = 40.0
     patience: int = 8                  # failed generations before reverting to best
     inventory_penalty: float = 5e-3
     seed: int = 0
@@ -244,7 +253,10 @@ class Arena:
             return
         keep = set(files[-self.cfg.pool_recent:])
         older = files[:-self.cfg.pool_recent]
-        stride = max(1, len(older) // (self.cfg.pool_max - self.cfg.pool_recent))
+        # Ceiling division: floor division rounds the stride down to 1 as the
+        # pool grows, which silently keeps every snapshot and defeats the cap.
+        budget = max(1, self.cfg.pool_max - self.cfg.pool_recent)
+        stride = max(1, -(-len(older) // budget))
         keep |= set(older[::stride])
         for f in files:
             if f not in keep:
@@ -392,8 +404,12 @@ class Arena:
                                                self.act_dim, f"gen{self.gen:04d}")
             seeds = [int(self.rng.integers(1 << 30)) for _ in range(cfg.eval_episodes)]
             h2h = head_to_head(candidate, incumbent, cfg, seeds)
-            gain = h2h["candidate"]["pnl"] - h2h["incumbent"]["pnl"]
-            promoted = gain > cfg.promote_margin
+            metric = cfg.promote_metric
+            gain = h2h["candidate"][metric] - h2h["incumbent"][metric]
+            cand_inv = h2h["candidate"]["abs_inv"]
+            inv_ok = (cand_inv <= cfg.max_abs_inventory and
+                      cand_inv <= cfg.max_inventory_ratio * max(h2h["incumbent"]["abs_inv"], 1.0))
+            promoted = gain > cfg.promote_margin and inv_ok
 
             reverted = False
             if promoted:
@@ -426,6 +442,8 @@ class Arena:
                 "reverted": bool(reverted),
                 "since_promotion": int(since_promotion),
                 "gain_vs_incumbent": round(float(gain), 2),
+                "gate_metric": metric,
+                "inventory_ok": bool(inv_ok),
                 "candidate": {k: round(v, 3) for k, v in h2h["candidate"].items()},
                 "incumbent": {k: round(v, 3) for k, v in h2h["incumbent"].items()},
                 "train": {k: round(v, 4) for k, v in train.items()},
@@ -440,8 +458,9 @@ class Arena:
 
             print(f"gen {self.gen:3d} | {row['wall_minutes']:5.1f}m | "
                   f"{self.transitions/1e6:6.2f}M trans | "
-                  f"cand PnL {h2h['candidate']['pnl']:8.1f} sharpe {h2h['candidate']['sharpe']:6.1f} "
-                  f"| inc {h2h['incumbent']['pnl']:8.1f} | gain {gain:+8.1f} "
+                  f"cand sharpe {h2h['candidate']['sharpe']:6.1f} PnL {h2h['candidate']['pnl']:7.0f} "
+                  f"|inv| {cand_inv:5.1f} | inc sharpe {h2h['incumbent']['sharpe']:6.1f} "
+                  f"| gain {gain:+7.2f}{'' if inv_ok else ' INV!'} "
                   f"| {'PROMOTED' if promoted else ('REVERTED' if reverted else 'held')} "
                   f"| pool {row['pool_size']} "
                   f"| {(self.deadline - time.time())/3600:4.2f}h left", flush=True)
@@ -461,6 +480,8 @@ def main():
     ap.add_argument("--chunk-transitions", type=int, default=150_000)
     ap.add_argument("--eval-episodes", type=int, default=16)
     ap.add_argument("--episode-steps", type=int, default=1000)
+    ap.add_argument("--promote-metric", choices=["sharpe", "pnl"], default="sharpe",
+                    help="what a candidate must beat the incumbent on")
     ap.add_argument("--patience", type=int, default=8,
                     help="failed generations before reverting the learner to best.pt")
     ap.add_argument("--seed", type=int, default=0)
@@ -470,7 +491,8 @@ def main():
     cfg = ArenaConfig(n_agents=args.n_agents, learner_seats=args.learner_seats,
                       hours=args.hours, chunk_transitions=args.chunk_transitions,
                       eval_episodes=args.eval_episodes, episode_steps=args.episode_steps,
-                      patience=args.patience, seed=args.seed)
+                      patience=args.patience, seed=args.seed,
+                      promote_metric=args.promote_metric)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))

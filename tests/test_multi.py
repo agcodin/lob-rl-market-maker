@@ -148,3 +148,20 @@ def test_selfplay_buffer_gae_matches_single_stream():
     for i in range(n):
         adv_s, _ = singles[i].compute_gae(float(last[i]), 0.99, 0.95)
         assert np.allclose(adv_m[:, i], adv_s, atol=1e-5)
+
+
+def test_pool_pruning_actually_caps_the_pool(tmp_path):
+    """A floored stride used to keep every snapshot once the pool got large."""
+    from lobrl.arena import Arena, ArenaConfig
+
+    cfg = ArenaConfig(pool_max=20, pool_recent=6)
+    a = Arena.__new__(Arena)          # prune needs only cfg and the directory
+    a.cfg = cfg
+    a.pool_dir = tmp_path
+    for i in range(140):
+        (tmp_path / f"gen_{i:04d}.pt").write_bytes(b"x")
+        a._prune_pool()
+        assert len(list(tmp_path.glob("gen_*.pt"))) <= cfg.pool_max, f"unbounded at {i}"
+    kept = sorted(p.name for p in tmp_path.glob("gen_*.pt"))
+    assert kept[-1] == "gen_0139.pt"          # newest always survives
+    assert len(kept) >= cfg.pool_recent
