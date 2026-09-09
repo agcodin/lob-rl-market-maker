@@ -77,7 +77,9 @@ class ArenaConfig:
     fundamental_vol: float = 0.0
     aux_coef: float = 2.0        # weight on the auxiliary supervised loss
     aux_target: str = "gap"
-    gap_predictor: str | None = None      # "gap" (latent fundamental) or "fwd" (return)
+    gap_predictor: str | None = None
+    lean_col: int | None = None
+    lean_init: float = 0.4      # "gap" (latent fundamental) or "fwd" (return)
     hidden: int = 128
     seed: int = 0
 
@@ -87,7 +89,11 @@ class FrozenPolicy:
 
     def __init__(self, net_state, norm_state, obs_dim, act_dim, label):
         hidden = net_state["actor.0.weight"].shape[0]
-        self.net = ActorCritic(obs_dim, act_dim, PPOConfig(hidden=hidden))
+        # A checkpoint that carries a lean vector was trained with the skip
+        # connection; rebuild it the same way or the weights will not load.
+        lean_col = obs_dim - 1 if "lean" in net_state else None
+        self.net = ActorCritic(obs_dim, act_dim,
+                               PPOConfig(hidden=hidden, lean_col=lean_col))
         # Older checkpoints predate the auxiliary head; its fresh init is fine.
         self.net.load_state_dict(net_state, strict=False)
         self.net.eval()
@@ -246,7 +252,8 @@ class Arena:
         self.act_dim = probe.action_space.shape[0]
 
         self.trainer = PPOTrainer(self.obs_dim, self.act_dim,
-                                  PPOConfig(hidden=cfg.hidden, aux_coef=cfg.aux_coef))
+                                  PPOConfig(hidden=cfg.hidden, aux_coef=cfg.aux_coef,
+                                            lean_col=cfg.lean_col, lean_init=cfg.lean_init))
         self.norm = RunningNorm(self.obs_dim)
         self.heuristics = make_heuristics()
         self.gen = 0
@@ -538,6 +545,9 @@ def main():
     ap.add_argument("--patience", type=int, default=8,
                     help="failed generations before reverting the learner to best.pt")
     ap.add_argument("--aux-target", choices=["gap", "fwd"], default="gap")
+    ap.add_argument("--lean-col", type=int, default=None,
+                    help="observation column wired straight to the action mean")
+    ap.add_argument("--lean-init", type=float, default=0.4)
     ap.add_argument("--gap-predictor", default=None,
                     help="path to a trained fundamental-gap estimator")
     ap.add_argument("--aux-coef", type=float, default=2.0,
@@ -565,7 +575,8 @@ def main():
                       flow_features=args.flow_features,
                       informed_frac=args.informed_frac,
                       fundamental_vol=args.fundamental_vol, aux_coef=args.aux_coef,
-                      aux_target=args.aux_target, gap_predictor=args.gap_predictor)
+                      aux_target=args.aux_target, gap_predictor=args.gap_predictor,
+                      lean_col=args.lean_col, lean_init=args.lean_init)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))

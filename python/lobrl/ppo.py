@@ -31,6 +31,12 @@ class PPOConfig:
     # signal, and the policy layer can then use it for free.
     aux_coef: float = 0.25
     aux_horizon: int = 10
+    # Optional learnable skip from one observation column straight to the action
+    # mean. Behaviour cloning could not reproduce the fundamental-gap lean
+    # precisely enough (action MSE 0.001 is ~28% of a signal that small), so the
+    # behaviour is wired in exactly and left trainable instead of approximated.
+    lean_col: int | None = None
+    lean_init: float = 0.4
 
 
 class RunningNorm:
@@ -82,6 +88,14 @@ class ActorCritic(nn.Module):
         self.aux = nn.Linear(cfg.hidden, 1)
         nn.init.orthogonal_(self.aux.weight, gain=0.1)
         nn.init.zeros_(self.aux.bias)
+        self.lean_col = cfg.lean_col
+        if cfg.lean_col is not None:
+            # [bid, ask]: a positive gap pulls the bid closer and the ask away.
+            lean = torch.zeros(act_dim)
+            lean[0], lean[1] = -cfg.lean_init, cfg.lean_init
+            self.lean = nn.Parameter(lean)
+        else:
+            self.register_parameter("lean", None)
         # Small final-layer gain keeps the initial policy near the action-space centre.
         for head in (self.actor, self.critic):
             nn.init.orthogonal_(head[-1].weight, gain=0.01)
@@ -94,9 +108,19 @@ class ActorCritic(nn.Module):
             h = layer(h)
         return h
 
+    def _mu(self, obs: torch.Tensor, feat: torch.Tensor) -> torch.Tensor:
+        mu = self.actor[-1](feat)
+        if self.lean is not None:
+            # Clamp BEFORE adding the lean. The base head often saturates past
+            # the action bound (a maximally wide quote), and adding the lean
+            # first would let that saturation swallow it -- measured: the bid
+            # leg moved 0.0 instead of 0.2. The env clamps anyway, so this only
+            # changes where the gradient stops, not what the policy can express.
+            mu = mu.clamp(-1.0, 1.0) + self.lean * obs[:, self.lean_col:self.lean_col + 1]
+        return mu
+
     def dist(self, obs: torch.Tensor) -> torch.distributions.Normal:
-        mu = self.actor[-1](self.features(obs))
-        return torch.distributions.Normal(mu, self.log_std.exp())
+        return torch.distributions.Normal(self._mu(obs, self.features(obs)), self.log_std.exp())
 
     def predict(self, obs: torch.Tensor) -> torch.Tensor:
         return self.aux(self.features(obs)).squeeze(-1)
@@ -108,7 +132,7 @@ class ActorCritic(nn.Module):
 
     def evaluate(self, obs: torch.Tensor, act: torch.Tensor):
         feat = self.features(obs)
-        d = torch.distributions.Normal(self.actor[-1](feat), self.log_std.exp())
+        d = torch.distributions.Normal(self._mu(obs, feat), self.log_std.exp())
         return (d.log_prob(act).sum(-1), d.entropy().sum(-1),
                 self.critic(obs).squeeze(-1), self.aux(feat).squeeze(-1))
 
