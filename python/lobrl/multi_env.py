@@ -101,9 +101,11 @@ class MultiAgentMarketMakingEnv:
             from lobrl.gap import HISTORY_LAGS  # noqa: PLC0415
             from lobrl.gap import load as load_gap
             self._gap_net, self._gap_cols, self._gap_sd = load_gap(self.cfg.gap_predictor)
+            self._gap_recursive = getattr(self._gap_net, "recursive", False)
             self._gap_hist_len = max(HISTORY_LAGS) + 1
             self._gap_uses_history = (
-                self._gap_net.net[0].in_features > len(self._gap_cols))
+                not self._gap_recursive
+                and self._gap_net.net[0].in_features > len(self._gap_cols))
         self.n_pred = 1 if self._gap_net is not None else 0
         self.observation_space = spaces.Box(
             -np.inf, np.inf, shape=(4 * K + 8 + self.n_flow + self.n_pred,), dtype=np.float32)
@@ -141,6 +143,7 @@ class MultiAgentMarketMakingEnv:
         self.f_size = 0.0
         self._last_gap_pred = 0.0
         self._gap_rows: list = []
+        self._gap_h = None          # recursive estimator state, reset per episode
 
     def reset(self, *, seed=None, options=None):
         if seed is not None:
@@ -392,6 +395,11 @@ class MultiAgentMarketMakingEnv:
         from lobrl.gap import stack  # noqa: PLC0415
 
         feats = row[self._gap_cols]
+        if self._gap_recursive:
+            x = torch.as_tensor(feats[None, None, :], dtype=torch.float32)
+            with torch.no_grad():
+                pred, self._gap_h = self._gap_net(x, self._gap_h)
+            return float(np.tanh(float(pred[0, 0]) / (2.0 * self._gap_sd)))
         if self._gap_uses_history:
             self._gap_rows.append(feats)
             if len(self._gap_rows) > self._gap_hist_len:

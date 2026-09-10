@@ -1,13 +1,4 @@
-# Experiment log
-
-A verbatim record of an autonomous session: 15 checkpoints over ~7 hours, five
-promotions, ten refutations, one machinery bug and one self-correction. Kept as
-written at the time -- including the wrong turns, which are the useful part.
-
-Every promotion here is a paired comparison (both policies quoting into the same
-book on the same seed, seats alternating) on a seed block never used to select
-the candidate. Bar: |t| >= 2.
-
+# Autonomous experiment log
 
 User is out; I run experiments, check every 30 min, pivot when an arm stalls.
 Append one block per check-in. Newest at the bottom.
@@ -599,3 +590,37 @@ champion is saved, everything is committed and the dashboard is published.
 
 **FINAL: 5 wins, 10 refutations, 1 machinery bug fixed, 1 self-correction.**
 Champion Sharpe in the informed market: ~10 (uninformed policy dropped in) -> 34.8.
+
+### Check-in 16 — structural change: **recursive estimator**, +2.54 (t=2.17)
+
+Two structural candidates probed before building either.
+
+**PROBE A — size skew on the estimate: REFUTED.** Variable quote size was
+refuted in the uninformed market, but never retested where a directional signal
+exists, and unlike position-taking it is free (same passive quotes, different
+size shown). Measured (block 500k, n=48):
+    k=0 (control) -0.86 | k=0.6 +0.63 | k=1.2 +0.22 | k=2.0 -2.28
+All inside the control's own noise. The lean already expresses the view
+efficiently; a second channel adds nothing.
+
+**PROBE B — recursive estimator: BUILT.** Motivation is structural rather than
+empirical: the gap is a latent random walk observed through noisy signed flow,
+which is a linear-Gaussian state-space problem whose optimal estimator is
+*recursive*. A lag stack truncates that recursion at 5 taps. On identical
+on-policy data:
+    lag-stack MLP  corr 0.547
+    GRU hidden 48  corr 0.599
+    GRU hidden 96  corr **0.608**
+Built as `GRUGapNet`; the env carries one hidden vector per step and resets it
+per episode, so it is O(1) state and needs no history buffer at all.
+Trained on-policy: held-out corr **0.636**. In-env feature vs the true gap went
+**0.42 -> 0.624**.
+
+Screen (510k, n=64) over lean scales: 0.8x -0.11 | **1.0x +3.70** | 1.3x +3.24.
+1.0x wins, so the promotion is the estimator ALONE -- cleanly isolated, as the
+attribution rule from check-in 14 requires.
+Confirm (520k, n=128): **+2.54, stderr 1.17, t=2.17, CI [+0.24,+4.85]**.
+**PROMOTED.** Champion policy weights untouched; Sharpe 34.5 -> 37.0.
+
+Seed blocks burned: ...500k 510k 520k. 50 tests passing.
+**Session: 6 wins, 11 refutations.**

@@ -16,8 +16,9 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn as nn
 
-from lobrl.gap import HISTORY_LAGS, MARKET_COLS, GapNet, stack
+from lobrl.gap import HISTORY_LAGS, MARKET_COLS, GapNet, GRUGapNet, stack
 
 # Market-visible slice of the observation: book levels, imbalance, spread,
 # volatility and the tape. Deliberately excludes the agent-private tail.
@@ -63,6 +64,51 @@ def collect(steps: int, seed: int, informed_frac: float, fundamental_vol: float,
 
 
 
+def train_gru(args):
+    """Train the recursive estimator on contiguous chunks with per-step targets."""
+    kw = dict(driver=args.driver, predictor=args.driver_predictor, history=False)
+    print(f"collecting {args.steps:,} steps ...", flush=True)
+    X, y = collect(args.steps, 4242, args.informed_frac, args.fundamental_vol, **kw)
+    Xv, yv = collect(args.steps // 4, 8888, args.informed_frac, args.fundamental_vol, **kw)
+
+    net = GRUGapNet(X.shape[1], args.hidden)
+    with torch.no_grad():
+        net.mean.copy_(torch.tensor(X.mean(0)))
+        net.std.copy_(torch.tensor(X.std(0) + 1e-6))
+
+    T = args.chunk
+
+    def chunk(a, b):
+        n = (len(a) // T) * T
+        return (torch.tensor(a[:n]).view(-1, T, a.shape[1]), torch.tensor(b[:n]).view(-1, T))
+
+    Xc, yc = chunk(X, y)
+    Xvc, yvc = chunk(Xv, yv)
+    opt = torch.optim.Adam(net.parameters(), 2e-3)
+    best, best_state = -1.0, None
+    for ep in range(args.epochs):
+        i = torch.randint(0, len(Xc), (64,))
+        opt.zero_grad()
+        pred, _ = net(Xc[i])
+        ((pred - yc[i]) ** 2).mean().backward()
+        nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+        opt.step()
+        if (ep + 1) % 100 == 0:
+            with torch.no_grad():
+                pv, _ = net(Xvc)
+            c = float(np.corrcoef(pv.reshape(-1).numpy(), yvc.reshape(-1).numpy())[0, 1])
+            if c > best:
+                best, best_state = c, {k: v.clone() for k, v in net.state_dict().items()}
+            print(f"  epoch {ep+1:4d}  held-out corr {c:+.3f}", flush=True)
+
+    net.load_state_dict(best_state)
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    torch.save({"state": net.state_dict(), "dim": X.shape[1], "cols": MARKET_COLS,
+                "corr": best, "gap_sd": float(y.std()), "arch": "gru",
+                "hidden": args.hidden}, args.out)
+    print(f"saved {args.out}  held-out corr {best:+.3f}  (lag-stack MLP was ~+0.55)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--steps", type=int, default=120_000)
@@ -73,11 +119,17 @@ def main():
                     help="policy checkpoint that quotes while data is collected")
     ap.add_argument("--driver-predictor", default=None,
                     help="gap predictor the driver policy expects in its observation")
+    ap.add_argument("--arch", choices=["mlp", "gru"], default="mlp",
+                    help="gru learns a recursive filter; mlp reads a lag stack")
+    ap.add_argument("--hidden", type=int, default=96)
+    ap.add_argument("--chunk", type=int, default=128, help="gru: sequence length")
     ap.add_argument("--no-history", action="store_true",
                     help="train on a single snapshot instead of a lag stack")
     ap.add_argument("--out", default="runs/gap_predictor.pt")
     args = ap.parse_args()
 
+    if args.arch == "gru":
+        return train_gru(args)
     print(f"collecting {args.steps:,} steps ...", flush=True)
     kw = dict(driver=args.driver, predictor=args.driver_predictor,
               history=not args.no_history)
