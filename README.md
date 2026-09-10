@@ -360,6 +360,25 @@ by 0.7 measured **+2.39 Sharpe (t=2.89)** over the champion on 128 paired
 episodes. Sweeping a scalar costs a minute; the run that failed to find it cost
 five million transitions.
 
+### Change one thing per promotion, or isolate each afterwards
+
+A promotion that swapped the estimator *and* rescaled the lean measured +5.54
+Sharpe (t=4.32) against the previous pair, which is real but says nothing about
+which half earned it. Tested separately, in the same book with the same
+estimator: the lean rescale measured **-1.01 (t=-1.19)** -- not justified -- while
+the estimator change measured **+3.55 (t=2.88)**. The whole win was the
+estimator; the lean change was reverted, leaving a simpler policy that is at
+least as good.
+
+### The agent competes away its own edge
+
+A stronger-leaning market maker pushes the mid toward the latent fundamental
+faster, so the gap it profits from shrinks: measured gap standard deviation 4.64
+in a weaker champion's market against 3.06 in a stronger one's. Better market
+making improves price discovery, and price discovery removes the signal that
+made it profitable. This is a real microstructure effect and it caps how far this
+particular edge can be pushed.
+
 ### Two rules this cost enough to learn
 
 - **Screen on one seed block, confirm on another.** Picking the best of several
