@@ -339,8 +339,33 @@ exactly and leaving it trainable worked: **+6.17 Sharpe (t=5.33)** over the
 baseline, and RL then tuned the lean from the ±0.40 seed to ±0.89/0.76 for a
 further **+2.22 (t=2.18)**.
 
+### The estimator must be trained on the market it is used in
+
+`train_gap_predictor.py --driver <policy>` collects its data while a policy is
+actually quoting. This is not a detail. An estimator trained on an idle book
+scores corr 0.502 there and only **0.406** in the book the champion makes -- the
+champion's own quotes change every feature it reads. Retraining on-policy and
+swapping *only the estimator*, with the policy weights untouched, measured
+**+3.88 Sharpe (t=2.68)** and **+6.21 (t=3.81)** on two independent seed blocks.
+One round closes the gap; a second on-policy iteration measured -1.83 (t=-1.01),
+so the loop converges immediately and is not worth repeating.
+
+### After a pipeline change, re-sweep the scalars tuned against the old pipeline
+
+Promoting the on-policy estimator changed the gap feature's scale (`gap_sd`
+3.225 -> 3.566) and left the lean, which had been tuned against the old one,
+too strong. Reinforcement learning did not fix it -- five consecutive training
+runs produced zero promotions. A hand sweep did: scaling the learned lean vector
+by 0.7 measured **+2.39 Sharpe (t=2.89)** over the champion on 128 paired
+episodes. Sweeping a scalar costs a minute; the run that failed to find it cost
+five million transitions.
+
 ### Two rules this cost enough to learn
 
+- **Screen on one seed block, confirm on another.** Picking the best of several
+  candidates and reporting its screening statistic is the classic trap: the
+  screen chose lean scale 0.7 at +4.23, and the confirmation on a fresh block
+  measured +2.39. Only the second number is real.
 - **Evaluate in pairs.** Both policies quote into the same book on the same seed
   with seats alternating. Unpaired, the noise is +-4 Sharpe and swamps every real
   effect here. And size the sample to the effect: a stable +2.2 read as
