@@ -302,3 +302,36 @@ def test_inventory_target_shifts_the_penalty_not_the_pnl():
     assert i_flat["q_star"] == 0.0
     # ...but the target moves with the gap estimate, so rewards differ.
     assert i_lean["q_star"] != 0.0
+
+
+def test_head_to_head_reports_the_paired_standard_error():
+    """The gate cannot tell a real gain from noise without this."""
+    from lobrl.arena import ArenaConfig, FrozenPolicy, head_to_head
+    from lobrl.ppo import ActorCritic, PPOConfig, RunningNorm
+
+    def mk(label):
+        return FrozenPolicy(ActorCritic(28, 2, PPOConfig()).state_dict(),
+                            RunningNorm(28).state_dict(), 28, 2, label)
+
+    cfg = ArenaConfig(n_agents=4, episode_steps=600)
+    r = head_to_head(mk("a"), mk("b"), cfg, [1000 + i for i in range(8)])
+    for key in ("sharpe", "pnl"):
+        assert key in r["paired_se"]
+        assert np.isfinite(r["paired_se"][key])
+        assert r["paired_se"][key] >= 0.0
+
+
+def test_promotion_threshold_scales_with_gate_noise():
+    """gain > 0 is not a ratchet: a candidate that is genuinely worse clears a
+    single noisy check whenever noise favours it."""
+    from lobrl.arena import ArenaConfig
+
+    def promotes(gain, se, cfg):
+        return gain > max(cfg.promote_margin, cfg.noise_k * se)
+
+    loose = ArenaConfig(noise_k=0.0)
+    strict = ArenaConfig(noise_k=1.0)
+    noise_se = 3.3                      # measured gate noise at 32 episodes
+    assert promotes(0.2, noise_se, loose)        # the old behaviour: noise wins
+    assert not promotes(0.2, noise_se, strict)   # fixed: 0.2 cannot clear 3.3
+    assert promotes(5.0, noise_se, strict)       # a real gain still passes

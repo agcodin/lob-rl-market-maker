@@ -56,6 +56,13 @@ class ArenaConfig:
     # still certify each drifted step as an "improvement".
     promote_metric: str = "sharpe"     # "sharpe" | "pnl"
     promote_margin: float = 0.0
+    # A candidate must beat the incumbent by more than this many standard errors
+    # of the paired difference. Promoting on gain>0 alone is not a ratchet: the
+    # 32-episode gate has a noise sd of ~3.3 Sharpe, so a candidate that is
+    # genuinely 2 Sharpe WORSE clears a single check whenever noise favours it,
+    # and over tens of generations that leaks reliably. Measured: three seeds
+    # started from the same champion and all three ended 2-7 Sharpe below it.
+    noise_k: float = 1.0
     # Hard guardrail for an unattended run: never promote a candidate carrying
     # far more inventory than the incumbent, whatever its score says.
     max_inventory_ratio: float = 1.35
@@ -159,9 +166,14 @@ def make_heuristics():
 # --------------------------------------------------------------------------
 
 def head_to_head(a, b, cfg: ArenaConfig, seeds, labels=("candidate", "incumbent")) -> dict:
-    """Run `a` and `b` in the same book over shared seeds, seats rotating."""
+    """Run `a` and `b` in the same book over shared seeds, seats rotating.
+
+    Also returns the standard error of the per-episode paired difference, which
+    the promotion gate needs in order to tell a real gain from gate noise.
+    """
     n = cfg.n_agents
     out = {labels[0]: [], labels[1]: []}
+    per_ep = {"sharpe": [], "pnl": []}
     for e, seed in enumerate(seeds):
         # Alternate which policy owns the even seats so neither keeps an edge.
         assign = [(a if (i + e) % 2 == 0 else b) for i in range(n)]
@@ -169,12 +181,23 @@ def head_to_head(a, b, cfg: ArenaConfig, seeds, labels=("candidate", "incumbent"
         res = _run_episode(assign, cfg, seed)
         for i, nm in enumerate(names):
             out[nm].append(res[i])
-    return {k: {"pnl": float(np.mean([r["final_pnl"] for r in v])),
-                "sharpe": float(np.mean([r["sharpe"] for r in v])),
-                "abs_inv": float(np.mean([r["mean_abs_inventory"] for r in v])),
-                "fills": float(np.mean([r["n_fills"] for r in v])),
-                "episodes": len(v)}
-            for k, v in out.items()}
+        ca = [res[i] for i in range(n) if names[i] == labels[0]]
+        cb = [res[i] for i in range(n) if names[i] == labels[1]]
+        per_ep["sharpe"].append(np.mean([r["sharpe"] for r in ca])
+                                - np.mean([r["sharpe"] for r in cb]))
+        per_ep["pnl"].append(np.mean([r["final_pnl"] for r in ca])
+                             - np.mean([r["final_pnl"] for r in cb]))
+    agg = {k: {"pnl": float(np.mean([r["final_pnl"] for r in v])),
+               "sharpe": float(np.mean([r["sharpe"] for r in v])),
+               "abs_inv": float(np.mean([r["mean_abs_inventory"] for r in v])),
+               "fills": float(np.mean([r["n_fills"] for r in v])),
+               "episodes": len(v)}
+           for k, v in out.items()}
+    agg["paired_se"] = {
+        k: float(np.std(v, ddof=1) / np.sqrt(len(v))) if len(v) > 1 else float("inf")
+        for k, v in per_ep.items()
+    }
+    return agg
 
 
 def env_config(cfg: ArenaConfig, n: int) -> MultiEnvConfig:
@@ -462,10 +485,12 @@ class Arena:
             h2h = head_to_head(candidate, incumbent, cfg, seeds)
             metric = cfg.promote_metric
             gain = h2h["candidate"][metric] - h2h["incumbent"][metric]
+            se = h2h["paired_se"][metric]
+            threshold = max(cfg.promote_margin, cfg.noise_k * se)
             cand_inv = h2h["candidate"]["abs_inv"]
             inv_ok = (cand_inv <= cfg.max_abs_inventory and
                       cand_inv <= cfg.max_inventory_ratio * max(h2h["incumbent"]["abs_inv"], 1.0))
-            promoted = gain > cfg.promote_margin and inv_ok
+            promoted = gain > threshold and inv_ok
 
             reverted = False
             if promoted:
@@ -498,6 +523,8 @@ class Arena:
                 "reverted": bool(reverted),
                 "since_promotion": int(since_promotion),
                 "gain_vs_incumbent": round(float(gain), 2),
+                "paired_se": round(float(se), 3),
+                "threshold": round(float(threshold), 3),
                 "gate_metric": metric,
                 "inventory_ok": bool(inv_ok),
                 "candidate": {k: round(v, 3) for k, v in h2h["candidate"].items()},
@@ -516,7 +543,7 @@ class Arena:
                   f"{self.transitions/1e6:6.2f}M trans | "
                   f"cand sharpe {h2h['candidate']['sharpe']:6.1f} PnL {h2h['candidate']['pnl']:7.0f} "
                   f"|inv| {cand_inv:5.1f} | inc sharpe {h2h['incumbent']['sharpe']:6.1f} "
-                  f"| gain {gain:+7.2f}{'' if inv_ok else ' INV!'} "
+                  f"| gain {gain:+7.2f}/{threshold:.2f}{'' if inv_ok else ' INV!'} "
                   f"| {'PROMOTED' if promoted else ('REVERTED' if reverted else 'held')} "
                   f"| pool {row['pool_size']} "
                   f"| {(self.deadline - time.time())/3600:4.2f}h left", flush=True)
@@ -544,6 +571,8 @@ def main():
                     help="chance an opponent seat is a heuristic quoter")
     ap.add_argument("--promote-metric", choices=["sharpe", "pnl"], default="sharpe",
                     help="what a candidate must beat the incumbent on")
+    ap.add_argument("--noise-k", type=float, default=1.0,
+                    help="standard errors of margin a candidate must clear")
     ap.add_argument("--patience", type=int, default=8,
                     help="failed generations before reverting the learner to best.pt")
     ap.add_argument("--aux-target", choices=["gap", "fwd"], default="gap")
@@ -571,7 +600,7 @@ def main():
     cfg = ArenaConfig(n_agents=args.n_agents, learner_seats=args.learner_seats,
                       hours=args.hours, chunk_transitions=args.chunk_transitions,
                       eval_episodes=args.eval_episodes, episode_steps=args.episode_steps,
-                      patience=args.patience, seed=args.seed,
+                      patience=args.patience, seed=args.seed, noise_k=args.noise_k,
                       promote_metric=args.promote_metric,
                       inventory_penalty=args.inventory_penalty,
                       p_baseline=args.p_baseline,
