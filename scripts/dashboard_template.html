@@ -553,6 +553,20 @@ pre { font-family: var(--f-mono); font-size: 11.5px; background: var(--surface-2
     </div>
 
     <div class="panel panel-pad" style="margin-top:16px">
+      <div class="panel-title">
+        <h3>How the specialist was built</h3>
+        <span class="sub">every step measured against the one before it</span>
+      </div>
+      <div class="tbl-scroll"><table id="prog-table"></table></div>
+      <p class="tbl-note">Five changes cleared the bar over the session; ten were measured and discarded.
+      Every promotion is a paired comparison on a seed block never used to choose it. Note where the gains came
+      from: four of the five are changes to the <em>pipeline around</em> the agent &mdash; wiring a behaviour in,
+      training the estimator on the market it is used in, recalibrating after that change, giving the estimator
+      memory. Only one came from reinforcement learning itself, and that was tuning a scalar already wired in
+      for it. Eight further training runs, roughly 40 million transitions, produced no promotion at all.</p>
+    </div>
+
+    <div class="panel panel-pad" style="margin-top:16px">
       <div class="panel-title"><h3>Ideas tested and discarded</h3><span class="sub">what did not work</span></div>
       <div class="tbl-scroll"><table id="ref-table"></table></div>
       <p class="tbl-note">Every one of these was killed by a direct measurement rather than by waiting for a
@@ -1239,6 +1253,14 @@ make eval          # this comparison table</pre>
       svg("line", { x1: X(0), x2: X(0), y1: Mg.t, y2: H - Mg.b, class: "axisline" }, node);
       text(node, (W + Mg.l) / 2, H - 4, "change in Sharpe measured before any training", "ax", "middle");
     })();
+
+    el("prog-table").innerHTML =
+      "<thead><tr><th>Change</th><th>Sharpe gain</th><th>t</th><th>Episodes</th><th>Where it came from</th></tr></thead><tbody>" +
+      (INF.progression || []).map((r) =>
+        '<tr class="' + (r.kept ? "is-agent" : "") + '"><td>' + r.name +
+        '</td><td class="best">' + (r.diff >= 0 ? "+" : "") + r.diff.toFixed(2) +
+        "</td><td>" + r.t.toFixed(2) + "</td><td>" + r.episodes +
+        '</td><td style="text-align:left">' + r.source + "</td></tr>").join("") + "</tbody>";
 
     el("ref-table").innerHTML = "<thead><tr><th>Idea</th><th>Why it was dropped</th></tr></thead><tbody>" +
       INF.refuted.map((r) => "<tr><td>" + r.idea + '</td><td style="text-align:left">' + r.why +
