@@ -11,6 +11,32 @@ import torch.nn as nn
 # and can be computed once per step and shared by every agent.
 MARKET_COLS = list(range(0, 21)) + [22, 23] + list(range(28, 32))
 
+# Lags fed to the estimator. History lives INSIDE the estimator, not in the
+# observation: the policy still sees one scalar estimate, so the observation
+# width and every existing champion stay valid. Measured offline, lags take the
+# estimate from corr 0.495 to 0.543.
+HISTORY_LAGS = (2, 4, 8, 16, 32)
+
+
+def stack(rows):
+    """Build one estimator input from a history buffer.
+
+    `rows` is a sequence of market-feature vectors, oldest first, with the
+    current row last. Short buffers repeat the oldest available row, so the
+    estimator sees a well-formed input from the first step of an episode.
+    """
+    import numpy as np
+
+    cur = rows[-1]
+    out = [cur]
+    for lag in HISTORY_LAGS:
+        out.append(rows[max(0, len(rows) - 1 - lag)])
+    return np.concatenate(out).astype("float32")
+
+
+def input_dim(n_market: int) -> int:
+    return n_market * (1 + len(HISTORY_LAGS))
+
 
 class GapNet(nn.Module):
     def __init__(self, dim: int, hidden: int = 96):

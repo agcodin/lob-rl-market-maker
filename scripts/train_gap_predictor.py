@@ -17,14 +17,15 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from lobrl.gap import MARKET_COLS, GapNet
+from lobrl.gap import HISTORY_LAGS, MARKET_COLS, GapNet, stack
 
 # Market-visible slice of the observation: book levels, imbalance, spread,
 # volatility and the tape. Deliberately excludes the agent-private tail.
 
 
 def collect(steps: int, seed: int, informed_frac: float, fundamental_vol: float,
-            driver: str | None = None, predictor: str | None = None):
+            driver: str | None = None, predictor: str | None = None,
+            history: bool = True):
     """Roll the market forward and record (market features, true gap).
 
     `driver` is a policy checkpoint that quotes while the data is collected. It
@@ -46,8 +47,13 @@ def collect(steps: int, seed: int, informed_frac: float, fundamental_vol: float,
         pol = FrozenPolicy.load(driver)
     obs, _ = env.reset(seed=seed)
     X, y = [], []
+    rows: list = []
+    hist_len = max(HISTORY_LAGS) + 1
     for _ in range(steps):
-        X.append(obs[0][MARKET_COLS].copy())
+        rows.append(obs[0][MARKET_COLS].copy())
+        if len(rows) > hist_len:
+            rows.pop(0)
+        X.append(stack(rows) if history else rows[-1])
         y.append(env.flow.fundamental - env.book.mid())
         a = (pol.act_batch(obs, deterministic=False) if pol is not None
              else np.zeros((n, env.act_dim), np.float32))
@@ -67,11 +73,14 @@ def main():
                     help="policy checkpoint that quotes while data is collected")
     ap.add_argument("--driver-predictor", default=None,
                     help="gap predictor the driver policy expects in its observation")
+    ap.add_argument("--no-history", action="store_true",
+                    help="train on a single snapshot instead of a lag stack")
     ap.add_argument("--out", default="runs/gap_predictor.pt")
     args = ap.parse_args()
 
     print(f"collecting {args.steps:,} steps ...", flush=True)
-    kw = dict(driver=args.driver, predictor=args.driver_predictor)
+    kw = dict(driver=args.driver, predictor=args.driver_predictor,
+              history=not args.no_history)
     X, y = collect(args.steps, 4242, args.informed_frac, args.fundamental_vol, **kw)
     Xv, yv = collect(args.steps // 4, 8888, args.informed_frac, args.fundamental_vol, **kw)
 

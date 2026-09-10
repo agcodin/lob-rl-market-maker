@@ -98,8 +98,12 @@ class MultiAgentMarketMakingEnv:
         self.n_flow = (len(self.cfg.flow_alphas) + 2) if self.cfg.flow_features else 0
         self._gap_net, self._gap_cols, self._gap_sd = None, None, 1.0
         if self.cfg.gap_predictor:
-            from lobrl.gap import load as load_gap  # noqa: PLC0415
+            from lobrl.gap import HISTORY_LAGS  # noqa: PLC0415
+            from lobrl.gap import load as load_gap
             self._gap_net, self._gap_cols, self._gap_sd = load_gap(self.cfg.gap_predictor)
+            self._gap_hist_len = max(HISTORY_LAGS) + 1
+            self._gap_uses_history = (
+                self._gap_net.net[0].in_features > len(self._gap_cols))
         self.n_pred = 1 if self._gap_net is not None else 0
         self.observation_space = spaces.Box(
             -np.inf, np.inf, shape=(4 * K + 8 + self.n_flow + self.n_pred,), dtype=np.float32)
@@ -136,6 +140,7 @@ class MultiAgentMarketMakingEnv:
         self.f_rate = 0.0
         self.f_size = 0.0
         self._last_gap_pred = 0.0
+        self._gap_rows: list = []
 
     def reset(self, *, seed=None, options=None):
         if seed is not None:
@@ -384,7 +389,15 @@ class MultiAgentMarketMakingEnv:
         """One market-wide estimate per step, shared by every agent."""
         import torch
 
-        x = torch.as_tensor(row[self._gap_cols][None, :], dtype=torch.float32)
+        from lobrl.gap import stack  # noqa: PLC0415
+
+        feats = row[self._gap_cols]
+        if self._gap_uses_history:
+            self._gap_rows.append(feats)
+            if len(self._gap_rows) > self._gap_hist_len:
+                self._gap_rows.pop(0)
+            feats = stack(self._gap_rows)
+        x = torch.as_tensor(feats[None, :], dtype=torch.float32)
         with torch.no_grad():
             return float(np.tanh(float(self._gap_net(x)[0]) / (2.0 * self._gap_sd)))
 
