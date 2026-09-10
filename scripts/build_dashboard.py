@@ -37,6 +37,7 @@ def main():
                     help="competitive results; the sections are dropped if absent")
     ap.add_argument("--arena", default="runs/arena_data.json",
                     help="overnight + intervention results; section dropped if absent")
+    ap.add_argument("--informed", default="runs/informed_data.json")
     ap.add_argument("--out", default="runs/dashboard.html")
     args = ap.parse_args()
 
@@ -81,6 +82,9 @@ def main():
 
     ar = Path(args.arena)
     payload["arena"] = json.loads(ar.read_text()) if ar.exists() else None
+
+    ip = Path(args.informed)
+    payload["informed"] = json.loads(ip.read_text()) if ip.exists() else None
 
     html = Path(args.template).read_text()
     out = html.replace("__PAYLOAD__", json.dumps(payload, separators=(",", ":")))

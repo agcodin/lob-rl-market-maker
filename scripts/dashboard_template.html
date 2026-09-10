@@ -517,6 +517,51 @@ pre { font-family: var(--f-mono); font-size: 11.5px; background: var(--surface-2
     </div>
   </section>
 
+  <section id="informed-section">
+    <div class="sec-head">
+      <h2>A harder market, and a specialist for it</h2>
+      <p>Switching on informed traders &mdash; a latent fundamental value that a fraction of takers can see and
+      trade toward &mdash; turns adverse selection from a statistic into an adversary. It needed a different
+      agent, and produced one that is measurably a specialist.</p>
+    </div>
+    <div class="panel panel-pad">
+      <div class="chart-grid">
+        <div>
+          <div class="panel-title"><h3>Informed market</h3><span class="sub">fundamental is tradeable</span></div>
+          <div class="tbl-scroll"><table id="inf-table"></table></div>
+        </div>
+        <div>
+          <div class="panel-title"><h3>Uninformed market</h3><span class="sub">mid is a martingale</span></div>
+          <div class="tbl-scroll"><table id="unf-table"></table></div>
+        </div>
+      </div>
+      <p class="tbl-note" id="inf-note"></p>
+    </div>
+
+    <div class="panel panel-pad" style="margin-top:16px">
+      <div class="panel-title">
+        <h3>What the probes said before any training</h3>
+        <span class="sub">Sharpe vs the same policy without the change</span>
+      </div>
+      <svg id="probe-chart" viewBox="0 0 700 200" role="img" aria-label="Probe results before training"></svg>
+      <p class="tbl-note">Each probe hand-builds a behaviour and measures it, which takes about a minute and
+      decides whether an hour of training is worth spending. Two of these were right. The third was
+      <em>wrong in an instructive way</em>: it measured the profit of holding a position sized by the estimate and
+      found an annualised Sharpe of 48 &mdash; but it assumed the position was free to hold, when the agent has to
+      buy it through fills and pay spread and adverse selection for it. Training against that target measured
+      &minus;4.30 (t=&minus;4.72). A probe is only valid if the mechanism it simulates is one the agent actually has.</p>
+    </div>
+
+    <div class="panel panel-pad" style="margin-top:16px">
+      <div class="panel-title"><h3>Ideas tested and discarded</h3><span class="sub">what did not work</span></div>
+      <div class="tbl-scroll"><table id="ref-table"></table></div>
+      <p class="tbl-note">Every one of these was killed by a direct measurement rather than by waiting for a
+      training run to disappoint. The estimator row is the counter-example that made the rest worth it: a
+      supervised model reads the latent value at correlation 0.48 where a linear model caps at 0.29 and
+      reinforcement learning never got past 0.15.</p>
+    </div>
+  </section>
+
   <footer>
     <div>
       <h3>What you are looking at</h3>
@@ -1118,6 +1163,91 @@ make eval          # this comparison table</pre>
         }).join("") + "</tr>").join("") + "</tbody>";
   }
 
+
+  /* ================= informed market ===================================== */
+  const INF = D.informed;
+  if (!INF) {
+    const n = el("informed-section");
+    if (n) n.remove();
+  } else {
+    const cols = [
+      { k: "sharpe", h: "Sharpe", d: 1, better: "max" },
+      { k: "final_pnl", h: "PnL", d: 0, better: "max" },
+      { k: "mean_abs_inventory", h: "Avg pos", d: 1, better: "min" },
+      { k: "max_drawdown", h: "Max DD", d: 0, better: "min" },
+      { k: "win_rate", h: "Win", d: 0, better: "max", pct: true },
+    ];
+    function table(node, tag, championName) {
+      const S = INF.standings[tag];
+      const best = {};
+      cols.forEach((c) => {
+        if (!c.better) return;
+        const v = INF.order.map((l) => S[l][c.k]);
+        best[c.k] = c.better === "max" ? Math.max.apply(null, v) : Math.min.apply(null, v);
+      });
+      node.innerHTML = "<thead><tr><th>Strategy</th>" + cols.map((c) => "<th>" + c.h + "</th>").join("") +
+        "</tr></thead><tbody>" + INF.order.map((lab) =>
+          '<tr class="' + (lab === championName ? "is-agent" : "") + '"><td>' + lab + "</td>" +
+          cols.map((c) => {
+            const v = S[lab][c.k];
+            const isBest = c.better && Math.abs(v - best[c.k]) < 1e-9;
+            return '<td class="' + (isBest ? "best" : "") + '">' +
+              (c.pct ? Math.round(v * 100) + "%" : v.toFixed(c.d)) + "</td>";
+          }).join("") + "</tr>").join("") + "</tbody>";
+    }
+    table(el("inf-table"), "informed", "Informed champion");
+    table(el("unf-table"), "uninformed", "Uninformed champion");
+
+    const iS = INF.standings.informed, uS = INF.standings.uninformed;
+    el("inf-note").innerHTML =
+      "Each champion wins its own market and loses the other: the informed specialist scores " +
+      iS["Informed champion"].sharpe.toFixed(1) + " vs " + iS["Uninformed champion"].sharpe.toFixed(1) +
+      " where the fundamental is tradeable, and " + uS["Informed champion"].sharpe.toFixed(1) + " vs " +
+      uS["Uninformed champion"].sharpe.toFixed(1) + " where it is not. Leaning on an estimate of a latent value " +
+      "is worth a great deal when there is one to estimate and nothing when there is not. Note also what the " +
+      "textbook Avellaneda&ndash;Stoikov quoter does when adverse selection becomes real: " +
+      iS["Avellaneda-Stoikov"].final_pnl.toFixed(0) + " PnL at " +
+      Math.round(iS["Avellaneda-Stoikov"].win_rate * 100) + "% win rate, carrying " +
+      iS["Avellaneda-Stoikov"].mean_abs_inventory.toFixed(0) + " shares.";
+
+    (function () {
+      const node = el("probe-chart"), W = 700, H = 200, Mg = { l: 250, r: 80, t: 12, b: 34 };
+      const rows = INF.probes;
+      const lo = Math.min(0, ...rows.map((r) => r.diff)) * 1.15;
+      const hi = Math.max(...rows.map((r) => r.diff)) * 1.15;
+      const rowH = (H - Mg.t - Mg.b) / rows.length;
+      const X = (v) => Mg.l + ((v - lo) / (hi - lo)) * (W - Mg.l - Mg.r);
+      ticks(lo, hi, 5).forEach((v) => {
+        svg("line", { x1: X(v), x2: X(v), y1: Mg.t, y2: H - Mg.b, class: "gridline" }, node);
+        text(node, X(v), H - Mg.b + 15, v.toFixed(0), "ax", "middle");
+      });
+      rows.forEach((r, i) => {
+        const good = r.diff > 0;
+        const y = Mg.t + i * rowH + rowH * 0.26, h = rowH * 0.42;
+        const x0 = Math.min(X(0), X(r.diff)), w = Math.abs(X(r.diff) - X(0));
+        const g = svg("g", {}, node);
+        svg("rect", { x: x0, y: y, width: Math.max(1, w), height: h, rx: 4,
+                      fill: good ? "var(--buy)" : "var(--sell)" }, g);
+        text(node, Mg.l - 12, y + h / 2 + 4, r.name, "ax", "end").setAttribute("fill", "var(--ink)");
+        text(node, X(r.diff) + (good ? 10 : -10), y + h / 2 + 4,
+             (good ? "+" : "") + r.diff.toFixed(1), "ax", good ? "start" : "end")
+          .setAttribute("fill", "var(--ink)");
+        g.addEventListener("mousemove", (e) => showTip(e, "<b>" + r.name + "</b><br>Sharpe " +
+          r.diff.toFixed(2) + "<br>t = " + r.t.toFixed(2) + "<br>" + r.verdict));
+        g.addEventListener("mouseleave", hideTip);
+      });
+      svg("line", { x1: X(0), x2: X(0), y1: Mg.t, y2: H - Mg.b, class: "axisline" }, node);
+      text(node, (W + Mg.l) / 2, H - 4, "change in Sharpe measured before any training", "ax", "middle");
+    })();
+
+    el("ref-table").innerHTML = "<thead><tr><th>Idea</th><th>Why it was dropped</th></tr></thead><tbody>" +
+      INF.refuted.map((r) => "<tr><td>" + r.idea + '</td><td style="text-align:left">' + r.why +
+        "</td></tr>").join("") +
+      '<tr class="is-agent"><td>Supervised value estimator</td><td style="text-align:left">kept &mdash; corr ' +
+      INF.estimator.supervised.toFixed(2) + " vs " + INF.estimator.linear_ceiling.toFixed(2) +
+      " for a linear model and " + INF.estimator.rl_managed.toFixed(2) +
+      " for reinforcement learning</td></tr></tbody>";
+  }
 
   /* ================= arena: the overnight failure and the fix ============ */
   const AR = D.arena;
