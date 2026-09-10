@@ -297,6 +297,64 @@ When the budget expires it runs the test suite, writes
 `runs/arena/MORNING_REPORT.md` (progress windows plus a final head-to-head
 against every earlier policy and both baselines), and rebuilds the dashboard.
 
+## 8. The informed market
+
+`informed_frac > 0` turns on Glosten-Milgrom / Kyle informed traders: a latent
+fundamental random-walks and a fraction of takers observe it and trade toward it,
+dragging the mid with them. This is a **separate benchmark** -- its numbers are
+not comparable to the uninformed market above, and it has its own champion
+(`runs/champion_informed.pt`; the uninformed champion stays `runs/champion.pt`).
+
+It is a much harder market. Avellaneda-Stoikov goes from +1083 PnL to **-1012**,
+and the uninformed champion drops from Sharpe 44.6 to 26.7.
+
+Winning in it needs an estimate of the latent fundamental, and the pipeline is:
+
+1. **Tape features** (`flow_features`) -- signed-volume EWMAs, arrival intensity
+   and mean trade size. Informed flow shows up as persistent one-directional
+   volume, so this is the only sensor that sees it: book imbalance, which the
+   policy already had, predicts the fundamental gap at corr **+0.02**, while the
+   tape alone manages **+0.29**.
+2. **A supervised estimator** (`scripts/train_gap_predictor.py`, `lobrl/gap.py`)
+   of the fundamental gap, from market-visible features only -- never inventory,
+   PnL or queue position, so its output is a property of the market and is
+   computed once per step for all agents. Held-out corr **+0.48**; a linear model
+   caps at +0.29 and reinforcement learning never got past +0.15.
+3. **A learnable lean** (`PPOConfig.lean_col`) -- a skip connection from the
+   estimate straight to the action mean, so a positive gap pulls the bid closer
+   and pushes the ask away.
+
+Why the estimator is supervised rather than learned by RL: the reward gradient
+for "read the tape" is indirect and buried in return variance. Measured, PPO left
+the tape input weights at 0.0035 (3% of the weight on other state features) after
+6M transitions, and the policy's quotes barely responded. Supervised learning on
+the same data finds the signal in seconds.
+
+Why the lean is wired in rather than trained from scratch: the behaviour is worth
+a measured +6.5 Sharpe (t=5.1) yet PPO did not find it even with the estimate
+handed over as an input feature at full weight. Behaviour cloning was tried and
+was not precise enough -- a held-out action MSE of 0.001 is ~28% of a lean whose
+typical magnitude is 0.087, and it recovered only +1.7 (t=1.1). Wiring it in
+exactly and leaving it trainable worked: **+6.17 Sharpe (t=5.33)** over the
+baseline, and RL then tuned the lean from the ±0.40 seed to ±0.89/0.76 for a
+further **+2.22 (t=2.18)**.
+
+### Two rules this cost enough to learn
+
+- **Evaluate in pairs.** Both policies quote into the same book on the same seed
+  with seats alternating. Unpaired, the noise is +-4 Sharpe and swamps every real
+  effect here. And size the sample to the effect: a stable +2.2 read as
+  non-significant three times at n=64 before n=160 resolved it.
+- **A ceiling probe is only valid if the thing it simulates is reachable by the
+  mechanism the agent actually has.** The oracle probe (change only the quotes)
+  was sound and predicted the +6 win. A later probe measured the PnL of holding a
+  position proportional to the estimate, found an annualised Sharpe of 48, and was
+  wrong -- it assumed the position was free to hold, when the agent has to acquire
+  it through fills and pay spread and adverse selection for it. Training against
+  that target measured **-4.30 Sharpe (t=-4.72)**. The lean was already the
+  efficient way to express the same view, because there the position accumulates
+  as a byproduct of spread capture at no extra cost.
+
 ## Notes and limitations
 
 - The engine is single-threaded by design; the arena and the price grid are the
@@ -313,5 +371,7 @@ against every earlier policy and both baselines), and rebuilds the dashboard.
   converged policies.
 - `caffeinate` keeps the Mac awake for the overnight run, but a closed laptop
   lid still sleeps unless an external display is attached.
+- The informed market is a separate benchmark with its own champion; do not
+  compare its numbers to the uninformed ones.
 - `make sweep` trains one seed per table size. The per-maker profit trend is
   monotonic across all four and survives that; the spread numbers do not.

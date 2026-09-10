@@ -76,11 +76,11 @@ class ArenaConfig:
     informed_frac: float = 0.0
     fundamental_vol: float = 0.0
     aux_coef: float = 2.0        # weight on the auxiliary supervised loss
-    aux_target: str = "gap"
+    aux_target: str = "gap"      # "gap" (latent fundamental) or "fwd" (return)
     gap_predictor: str | None = None
     lean_col: int | None = None
     lean_init: float = 0.4
-    inventory_target_gain: float = 0.0      # "gap" (latent fundamental) or "fwd" (return)
+    inventory_target_gain: float = 0.0
     hidden: int = 128
     seed: int = 0
 
