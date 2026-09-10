@@ -17,6 +17,7 @@ cpp/bench/bench_latency.cpp                                     # tick-to-trade 
 python/lobrl/         flow.py env.py ppo.py baselines.py metrics.py train.py evaluate.py
                       multi_env.py selfplay.py league.py          # multi-agent
 tests/                test_engine.py  test_env.py  test_multi.py
+docs/                 EXPERIMENT_LOG.md                          # the full record
 scripts/              bench_python.py  profile_perf.sh  record_episode.py
                       record_league.py  build_dashboard.py  competition_sweep.py
 ```
@@ -398,6 +399,16 @@ particular edge can be pushed.
   that target measured **-4.30 Sharpe (t=-4.72)**. The lean was already the
   efficient way to express the same view, because there the position accumulates
   as a byproduct of spread capture at no extra cost.
+
+## Where to read the details
+
+`docs/EXPERIMENT_LOG.md` is the verbatim record of the session that produced the
+informed-market champion: 15 checkpoints, every measurement, and the reasoning at
+each decision including the wrong turns. It is kept unedited because the failures
+carry most of the transferable content -- an overnight run that spent 103M
+transitions making the agent worse, a promotion gate that promoted on noise for a
+whole session, a ceiling probe that was invalid in a way that took a -4.30 Sharpe
+result to expose.
 
 ## Notes and limitations
 
