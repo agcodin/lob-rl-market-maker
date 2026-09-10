@@ -79,7 +79,8 @@ class ArenaConfig:
     aux_target: str = "gap"
     gap_predictor: str | None = None
     lean_col: int | None = None
-    lean_init: float = 0.4      # "gap" (latent fundamental) or "fwd" (return)
+    lean_init: float = 0.4
+    inventory_target_gain: float = 0.0      # "gap" (latent fundamental) or "fwd" (return)
     hidden: int = 128
     seed: int = 0
 
@@ -184,6 +185,7 @@ def env_config(cfg: ArenaConfig, n: int) -> MultiEnvConfig:
                           max_quote_size=cfg.max_quote_size,
                           flow_features=cfg.flow_features,
                           gap_predictor=cfg.gap_predictor,
+                          inventory_target_gain=cfg.inventory_target_gain,
                           flow=FlowConfig(informed_frac=cfg.informed_frac,
                                           fundamental_vol=cfg.fundamental_vol))
 
@@ -545,6 +547,8 @@ def main():
     ap.add_argument("--patience", type=int, default=8,
                     help="failed generations before reverting the learner to best.pt")
     ap.add_argument("--aux-target", choices=["gap", "fwd"], default="gap")
+    ap.add_argument("--inventory-target-gain", type=float, default=0.0,
+                    help="shares of target inventory per unit of predicted gap")
     ap.add_argument("--lean-col", type=int, default=None,
                     help="observation column wired straight to the action mean")
     ap.add_argument("--lean-init", type=float, default=0.4)
@@ -576,7 +580,8 @@ def main():
                       informed_frac=args.informed_frac,
                       fundamental_vol=args.fundamental_vol, aux_coef=args.aux_coef,
                       aux_target=args.aux_target, gap_predictor=args.gap_predictor,
-                      lean_col=args.lean_col, lean_init=args.lean_init)
+                      lean_col=args.lean_col, lean_init=args.lean_init,
+                      inventory_target_gain=args.inventory_target_gain)
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "config.json").write_text(json.dumps(asdict(cfg), indent=2))

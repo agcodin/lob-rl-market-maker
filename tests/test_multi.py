@@ -279,3 +279,26 @@ def test_informed_flow_drags_the_mid_toward_the_fundamental():
     f2 = MarketFlow(FlowConfig(), np.random.default_rng(0))
     f2.seed_book(b2, 10_000)
     assert sum(f2.step(b2)["informed"] for _ in range(300)) == 0
+
+
+def test_inventory_target_shifts_the_penalty_not_the_pnl():
+    """phi*(q-q*)^2 must penalise only the UNJUSTIFIED part of a position."""
+    from lobrl.flow import FlowConfig
+
+    base = dict(n_agents=2, max_steps=50, flow_features=True,
+                gap_predictor="runs/gap_predictor.pt",
+                flow=FlowConfig(informed_frac=0.35, fundamental_vol=0.35))
+    flat = MultiAgentMarketMakingEnv(MultiEnvConfig(**base), seed=1)
+    lean = MultiAgentMarketMakingEnv(
+        MultiEnvConfig(**base, inventory_target_gain=40.0), seed=1)
+    for env in (flat, lean):
+        env.reset(seed=1)
+    a = np.zeros((2, 2), np.float32)
+    for _ in range(50):
+        _, r_flat, _, _, i_flat = flat.step(a)
+        _, r_lean, _, _, i_lean = lean.step(a)
+    # Identical seeds and actions -> identical markets and identical equity.
+    assert np.allclose(i_flat["equity"], i_lean["equity"])
+    assert i_flat["q_star"] == 0.0
+    # ...but the target moves with the gap estimate, so rewards differ.
+    assert i_lean["q_star"] != 0.0

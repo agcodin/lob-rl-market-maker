@@ -54,6 +54,14 @@ class MultiEnvConfig:
     min_offset: float = 0.5
     max_offset: float = 10.0
     inventory_penalty: float = 5e-3   # phi
+    # Avellaneda-Stoikov penalises q^2, i.e. it treats ALL inventory as risk.
+    # That is only correct when the mid is a martingale. With informed flow the
+    # mid is predictable, and a position proportional to the predicted gap earns
+    # an annualised Sharpe of ~48 on its own -- yet phi*q^2 outweighs that edge
+    # by ~17x, so the agent is punished for being right. With this set, the
+    # penalty becomes phi*(q - q*)^2 where q* tracks the predicted gap, so
+    # unwanted inventory is still penalised but a justified position is not.
+    inventory_target_gain: float = 0.0
     turnover_penalty: float = 1e-3    # eta
     vol_window: int = 50
     # Submission order is reshuffled every step. Without this, whichever agent
@@ -127,6 +135,7 @@ class MultiAgentMarketMakingEnv:
         self.f_vol = np.zeros(len(self.cfg.flow_alphas))
         self.f_rate = 0.0
         self.f_size = 0.0
+        self._last_gap_pred = 0.0
 
     def reset(self, *, seed=None, options=None):
         if seed is not None:
@@ -169,9 +178,13 @@ class MultiAgentMarketMakingEnv:
 
         value = self.cash + self.inventory * new_mid
         d_pnl = value - self.prev_value
+        # Target inventory: zero unless a gap estimate says a position is
+        # justified. Uses the prediction the agent actually acted on this step.
+        q_star = cfg.inventory_target_gain * self._last_gap_pred
+        excess = self.inventory.astype(np.float64) - q_star
         rewards = (
             d_pnl
-            - cfg.inventory_penalty * self.inventory.astype(np.float64) ** 2
+            - cfg.inventory_penalty * excess ** 2
             - cfg.turnover_penalty * d_inv.astype(np.float64) ** 2
         )
         self.prev_value = value
@@ -363,7 +376,8 @@ class MultiAgentMarketMakingEnv:
                 flow,
             ])
         if self.n_pred:
-            out[:, -1] = self._predict_gap(out[0])
+            self._last_gap_pred = self._predict_gap(out[0])
+            out[:, -1] = self._last_gap_pred
         return out
 
     def _predict_gap(self, row: np.ndarray) -> float:
@@ -389,6 +403,7 @@ class MultiAgentMarketMakingEnv:
             "trades": self.trade_count.copy(),
             "volume": self.volume_traded.copy(),
             "spread": self.book.spread(),
+            "q_star": float(self.cfg.inventory_target_gain * self._last_gap_pred),
             # Training-time-only label: never enters the observation, only the
             # auxiliary supervised head. The policy still trades on what it can
             # actually see.
