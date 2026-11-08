@@ -19,6 +19,14 @@ if(LOBRL_NATIVE)
   endif()
 endif()
 
+# Sanitizers are a build option rather than a separate target so the tests
+# below run as-is under ASan/UBSan: -DLOBRL_SANITIZE=ON.
+option(LOBRL_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(LOBRL_SANITIZE)
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
 add_executable(bench_latency cpp/bench/bench_latency.cpp)
 target_link_libraries(bench_latency PRIVATE lob_core)
 target_compile_options(bench_latency PRIVATE -O3 -fno-omit-frame-pointer)
@@ -29,4 +37,26 @@ find_package(pybind11 CONFIG QUIET)
 if(pybind11_FOUND)
   pybind11_add_module(_lobcore cpp/src/bindings.cpp)
   target_link_libraries(_lobcore PRIVATE lob_core)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+  include(FetchContent)
+  FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG        v3.5.4
+    GIT_SHALLOW    TRUE
+  )
+  FetchContent_MakeAvailable(Catch2)
+
+  add_executable(lob_tests cpp/tests/test_book.cpp cpp/tests/test_invariants.cpp)
+  target_link_libraries(lob_tests PRIVATE lob_core Catch2::Catch2WithMain)
+  # The arena is a few megabytes of members, so the book is heap-allocated in
+  # the tests; keep frame sizes honest anyway.
+  target_compile_options(lob_tests PRIVATE -Wall -Wextra -Wno-unused-parameter)
+
+  list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+  include(Catch)
+  catch_discover_tests(lob_tests)
 endif()
