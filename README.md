@@ -1,5 +1,7 @@
 # Low-Latency Limit Order Book & Multi-Agent RL Market Maker
 
+[![CI](https://github.com/agcodin/lob-rl-market-maker/actions/workflows/ci.yml/badge.svg)](https://github.com/agcodin/lob-rl-market-maker/actions/workflows/ci.yml)
+
 A deterministic, zero-heap-allocation limit order book matching engine in C++20,
 bound to Python through `pybind11` over contiguous NumPy buffers, plus a PPO
 market maker trained against synthetic microstructure flow with an
@@ -91,15 +93,31 @@ manages ~41 ns. The harness measures that resolution at startup rather than
 trusting the advertised frequency, and falls back to timing blocks of 64
 operations when it is too coarse, saying so in its output. In that mode the
 percentiles describe the per-operation cost *within* a block, which understates
-the true tail, because one slow operation is averaged across the block. On x86
-`rdtsc` resolves a single operation and the harness times each one directly.
+the true tail, because one slow operation is averaged across the block.
+
+Per-operation timing is implemented, but no machine measured so far has earned
+it. The x86 CI runner looked like the obvious candidate, and `rdtsc` there
+reports 0.409 ns per tick, yet the smallest gap it actually resolves is 9.8 ns,
+so that run fell back to blocks as well. The mode is chosen from the measured
+resolution at runtime, so a machine with a finer clock will get per-operation
+timing without any change here.
 
 Two things the harness refuses to do. It clamps the add phase to the arena's
 capacity, because resting more orders than the arena holds turns the tail of the
 measurement into rejections, which are far cheaper than a real insert and bias
-the median downwards — a 500,000-iteration run reported 3.25 ns until this was
-fixed, against 3.91 ns measured honestly. And it aborts rather than print if any
-rejection occurred during the add phase.
+the median downwards, since a 500,000-iteration run reported 3.25 ns until this
+was fixed, against 3.91 ns measured honestly. And it aborts rather than print if
+any rejection occurred during the add phase.
+
+**The CI numbers are not these numbers, by design.** CI runs the benchmark as a
+smoke test on a shared runner, where the figures are several times slower and
+much noisier. The same run that produced the green badge measured the engine at
+16.8 to 28.8 ns on an AMD EPYC 7763, against the 3.9 to 5.9 ns in the table
+above, which was measured on a quiet laptop with `-mcpu=native`. The speedups
+over `std::map` fall too, to between 1.8x and 9.0x. Shared cloud runners are
+throttled, virtualized and noisy neighbours, so treat the CI run as proof that
+the harness still builds and produces sane output, and the table above as the
+measurement.
 
 `scripts/profile_perf.sh` runs `perf stat` for IPC and L1-dcache miss rate
 (Linux only; it prints the `xctrace` equivalent on macOS). That script has not
