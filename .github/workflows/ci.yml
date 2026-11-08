@@ -33,6 +33,10 @@ jobs:
       - name: Test
         env:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          # Leak detection is worth having here because the engine claims to do
+          # no allocation on the hot path. It is Linux-only: on macOS ASan
+          # aborts with "detect_leaks is not supported on this platform", so
+          # run local sanitizer builds with ASAN_OPTIONS=detect_leaks=0.
           ASAN_OPTIONS: detect_leaks=1
         run: ctest --test-dir build --output-on-failure
 
