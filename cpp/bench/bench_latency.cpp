@@ -204,16 +204,32 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The add phase rests one order per iteration and nothing frees them until
+    // the cancel phase, so asking for more iterations than the arena holds
+    // silently turns the tail of the measurement into rejections, which are far
+    // cheaper than a real insert and bias the number downwards. Clamp instead.
+    const std::size_t resting_now = static_cast<std::size_t>(fast->live_orders());
+    const std::size_t add_capacity = lob::kMaxOrders - resting_now - 4096;
+    std::size_t add_n = N;
+    if (add_n > add_capacity) {
+        add_n = add_capacity;
+        if (!g_csv) {
+            std::printf("  note: add phase clamped to %zu iterations; the arena holds\n"
+                        "        %zu orders and measuring past that would time rejects\n\n",
+                        add_n, lob::kMaxOrders);
+        }
+    }
     const std::size_t blocks = std::max<std::size_t>(N / block, 1);
+    const std::size_t add_blocks = std::max<std::size_t>(add_n / block, 1);
     std::uniform_int_distribution<int> depth(1, 32);
 
     // ---- limit add ----------------------------------------------------
     std::vector<double> add_fast, add_slow;
     std::vector<lob::OrderId> live_fast;
     std::vector<lob::OrderId> live_slow;
-    add_fast.reserve(blocks);
-    add_slow.reserve(blocks);
-    for (std::size_t b = 0; b < blocks; ++b) {
+    add_fast.reserve(add_blocks);
+    add_slow.reserve(add_blocks);
+    for (std::size_t b = 0; b < add_blocks; ++b) {
         std::vector<lob::Tick> px(block);
         std::vector<lob::Side> sd(block);
         for (std::size_t i = 0; i < block; ++i) {
@@ -227,6 +243,12 @@ int main(int argc, char** argv) {
         timer.start();
         for (std::size_t i = 0; i < block; ++i) live_slow.push_back(slow.limit(sd[i], px[i], 20, lob::kNoise));
         add_slow.push_back(timer.per_op(block));
+    }
+    // If this trips, the numbers above are measuring rejections, not inserts.
+    if (fast->rejects() != 0) {
+        std::fprintf(stderr, "BENCHMARK INVALID: %lld rejects during the add phase\n",
+                     static_cast<long long>(fast->rejects()));
+        return 1;
     }
     report("limit add (rest)", "engine", add_fast);
     report("limit add (rest)", "std::map", add_slow);
