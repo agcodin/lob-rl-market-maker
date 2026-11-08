@@ -1,7 +1,7 @@
 PY := .venv/bin/python
 PIP := .venv/bin/pip
 
-.PHONY: venv install bench bench-py test train eval selfplay sweep league dashboard overnight overnight-stop arena-status perf clean
+.PHONY: venv install bench bench-py test cpp-test cpp-test-san train eval selfplay sweep league dashboard overnight overnight-stop arena-status perf clean
 
 venv:
 	python3 -m venv .venv && $(PIP) install -U pip wheel setuptools
@@ -10,17 +10,27 @@ install: venv
 	$(PIP) install -r requirements.txt
 	ARCHFLAGS="-arch $$(uname -m)" LOBRL_NATIVE=1 $(PIP) install -e .
 
-test:
+test: cpp-test
 	$(PY) -m pytest tests -q
 
-bench: build/bench_latency
-	./build/bench_latency 500000
+# --- C++ engine -----------------------------------------------------------
+build/CMakeCache.txt:
+	cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
 
-build/bench_latency: cpp/bench/bench_latency.cpp cpp/include/lob/*.hpp
-	@mkdir -p build
-	c++ -std=c++20 -O3 -DNDEBUG -g -fno-omit-frame-pointer \
-	    $$(uname -m | grep -q arm64 && echo -mcpu=native || echo -march=native) \
-	    -Icpp/include $< -o $@
+cpp-test: build/CMakeCache.txt
+	cmake --build build -j
+	ctest --test-dir build --output-on-failure
+
+# Leak detection is Linux-only; ASan aborts on macOS when it is enabled.
+cpp-test-san:
+	cmake -B build-san -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLOBRL_SANITIZE=ON
+	cmake --build build-san -j
+	ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+	    ctest --test-dir build-san --output-on-failure
+
+bench: build/CMakeCache.txt
+	cmake --build build --target bench_latency -j
+	./build/bench_latency 200000
 
 bench-py:
 	$(PY) scripts/bench_python.py

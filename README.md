@@ -6,7 +6,9 @@ market maker trained against synthetic microstructure flow with an
 inventory-penalized Avellaneda–Stoikov reward, and a multi-agent league where
 several makers compete for the same order flow.
 
-**Headline numbers** — 4–7 ns per order-book operation (p50), and a learned
+**Headline numbers** — 3.9 to 5.9 ns per order-book operation at the median,
+between 3.7 and 16.5 times faster than a `std::map` book doing the same work
+depending on the operation, and a learned
 market maker that beats the closed-form Avellaneda–Stoikov quoter by 7.7x on
 risk-adjusted return while carrying a ninth of the inventory.
 
@@ -26,8 +28,9 @@ scripts/              bench_python.py  profile_perf.sh  record_episode.py
 
 ```bash
 make install       # venv + deps + build the extension in place
-make test          # 28 engine/env/metric tests
-make bench         # C++ tick-to-trade latency percentiles
+make test          # 50 Python tests (engine, environment, multi-agent, metrics)
+make bench         # C++ latency percentiles against a std::map baseline
+ctest --test-dir build  # 36 C++ test cases, ~1.4M assertions
 make bench-py      # bridge throughput + zero-copy verification
 make train         # single-agent PPO, 1.2M steps (~5 min on a laptop CPU)
 make eval          # PPO vs fixed-spread and Avellaneda-Stoikov baselines
@@ -56,21 +59,111 @@ No `std::map`, no `std::list`, no pointer-based trees, no allocation on the hot 
 - **Generation-tagged ids** — `order_id = (generation << 20) | slot`. A recycled
   slot bumps its generation, so a stale id can never resolve to the new order.
 
-Measured on an Apple M4 (`make bench`, blocks of 64 operations, ns/op):
+### Measured latency
 
-| operation | p50 | p99 | p99.9 |
-|---|---|---|---|
-| limit add (rest) | 3.9 | 7.2 | 32.6 |
-| cancel | 5.9 | 9.1 | 11.7 |
-| aggressive cross (1 level) | 7.2 | 9.8 | 11.1 |
-| L2 snapshot (10 levels) | 7.8 | 10.4 | 11.1 |
+Every operation is also run against `cpp/support/reference_book.hpp`, a
+`std::map` of price to a `std::list` of orders with an iterator stored per order
+— the obvious implementation, written for clarity. A nanosecond figure on its
+own says very little; what it is a nanosecond *against* is the point.
 
-All well inside the <100 ns tick-to-trade target. The steady clock granularity on
-Apple silicon is ~41.7 ns — coarser than a single book operation — so the harness
-times blocks of 64 operations and reports the per-operation cost within a block;
-on x86 it reads `rdtsc` directly. `scripts/profile_perf.sh` runs `perf stat` for
-IPC and L1-dcache miss rate (Linux only; it prints the `xctrace` equivalent on
-macOS).
+```
+machine    : Apple M5 Pro (arm64)
+compiler   : clang 21.0.0 (clang-2100.4.1.1)
+build flags: -O3 -fno-omit-frame-pointer -mcpu=native
+iterations : 200000
+```
+
+| operation | engine p50 | engine p99 | engine p99.9 | `std::map` p50 | speedup |
+|---|---|---|---|---|---|
+| limit add (rest) | **3.91** | 16.94 | 282.17 | 33.86 | 8.7x |
+| cancel | **5.20** | 22.12 | 29.30 | 85.94 | 16.5x |
+| aggressive cross (1 level) | **5.86** | 7.81 | 10.69 | 21.48 | 3.7x |
+| L2 snapshot (10 levels) | **5.86** | 8.45 | 11.06 | 75.52 | 12.9x |
+
+Reproduce with `make bench`, or `./build/bench_latency 200000 --csv` for machine
+-readable output. The harness prints the machine, compiler and flags it was built
+with, so a pasted result carries its own provenance.
+
+**On the timing method.** Per-operation timing needs a clock that can resolve a
+single operation, and on this machine neither can: `cntfrq_el0` advertises 1 GHz,
+but the smallest gap the counter actually resolves is ~18 ns, and `steady_clock`
+manages ~41 ns. The harness measures that resolution at startup rather than
+trusting the advertised frequency, and falls back to timing blocks of 64
+operations when it is too coarse, saying so in its output. In that mode the
+percentiles describe the per-operation cost *within* a block, which understates
+the true tail, because one slow operation is averaged across the block. On x86
+`rdtsc` resolves a single operation and the harness times each one directly.
+
+Two things the harness refuses to do. It clamps the add phase to the arena's
+capacity, because resting more orders than the arena holds turns the tail of the
+measurement into rejections, which are far cheaper than a real insert and bias
+the median downwards — a 500,000-iteration run reported 3.25 ns until this was
+fixed, against 3.91 ns measured honestly. And it aborts rather than print if any
+rejection occurred during the add phase.
+
+`scripts/profile_perf.sh` runs `perf stat` for IPC and L1-dcache miss rate
+(Linux only; it prints the `xctrace` equivalent on macOS). That script has not
+been run, so this README makes no claim about IPC or cache behaviour.
+
+### Testing
+
+```bash
+cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure        # 36 C++ test cases
+```
+
+**Unit tests** (`cpp/tests/test_book.cpp`) cover adding, cancelling, partial
+fills, price-time priority, crossing and marketable limits, empty-book and price
+-grid boundaries, arena exhaustion, snapshot padding, event-ring wraparound, and
+id reuse across heavy arena recycling.
+
+**Property and differential tests** (`cpp/tests/test_invariants.cpp`) replay
+random order streams and check, after every operation, that:
+
+- volume is conserved exactly — a limit order moves resting volume by its size
+  less twice whatever it traded away, a market order by exactly what it filled,
+  a cancel by exactly what it was holding;
+- the book is never crossed, the touch is always the extreme populated level
+  with nothing beyond it, and a level holds orders exactly when it holds volume;
+- the engine agrees with the naive reference book on best bid, best ask,
+  cumulative volume, live order count, and per-level volume and count;
+- queue position matches the reference's FIFO order exactly, which is the
+  observable form of time priority.
+
+That is 36 test cases and about 1.4 million assertions. Run them under
+AddressSanitizer and UndefinedBehaviorSanitizer with:
+
+```bash
+cmake -B build-san -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLOBRL_SANITIZE=ON
+cmake --build build-san -j
+ASAN_OPTIONS=detect_leaks=0 ctest --test-dir build-san --output-on-failure
+```
+
+Leak detection is enabled in CI, which runs on Linux. It is unsupported on
+macOS, where ASan aborts with `detect_leaks is not supported on this platform`,
+hence `detect_leaks=0` above.
+
+**What the fuzzing found.** No defect in the engine. Both sanitizers are clean
+and the differential test agrees with the reference on every one of the millions
+of operations replayed so far. It did catch one bug, in the test itself: the
+priority test drew a fresh random order size for each book instead of feeding
+both the same one, so the two books diverged and the comparison was meaningless.
+Worth recording because an engine bug and a harness bug look identical in a test
+report, and only one of them is the engine's problem.
+
+**Known limitation: no self-trade prevention.** The engine matches on price and
+time alone and never compares owners, so a participant can trade with itself.
+`cpp/tests/test_book.cpp` pins that behaviour in a test tagged
+`[known-limitation]` rather than leaving it undefined. Callers that need
+prevention enforce it above the engine, which is what the environment does by
+clamping its own quotes so they cannot cross. There is also no modify or
+replace operation; cancel and re-add is the only path.
+
+**Continuous integration** (`.github/workflows/ci.yml`) builds release and
+sanitizer configurations, runs the full C++ suite under both, runs a benchmark
+smoke test that asserts every operation produced a finite positive median, and
+builds the Python extension to run the engine's binding tests.
 
 ## 2. Python bridge (`pybind11`)
 
@@ -133,7 +226,10 @@ A-S formulation.
 
 ## 5. Verification and benchmarking
 
-- `make test` — 40 tests: matching invariants (price-time priority, partial
+- `ctest --test-dir build` — 36 C++ test cases and about 1.4M assertions:
+  unit tests, plus property and differential tests against a naive reference
+  book, all clean under ASan and UBSan. See **Testing** above.
+- `make test` — 50 Python tests: matching invariants (price-time priority, partial
   fills, multi-level sweeps, stale-id safety, arena exhaustion, zero-copy event
   view), environment invariants (determinism under seed, cash/inventory
   consistency, quotes never crossing, inventory cap, flow stationarity, Hawkes
