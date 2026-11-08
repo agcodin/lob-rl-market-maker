@@ -10,8 +10,13 @@
 //
 // It must mirror lob::OrderBook's semantics exactly, including that a limit
 // order sweeps the opposing side before resting its remainder.
+//
+// It is deliberately the *reasonable* obvious implementation rather than a
+// strawman: a std::list per price level with an iterator stored per order, so
+// cancelling is a map lookup plus an O(1) splice, not a linear scan. Comparing
+// against a deliberately bad baseline would flatter the engine and mean nothing.
 #include <cstdint>
-#include <deque>
+#include <list>
 #include <map>
 #include <unordered_map>
 
@@ -23,6 +28,14 @@ struct Order {
     lob::OrderId id;
     lob::Qty qty;
     lob::OwnerId owner;
+};
+
+class ReferenceBook;
+
+struct Location {
+    lob::Side side;
+    lob::Tick price;
+    std::list<Order>::iterator pos;
 };
 
 class ReferenceBook {
@@ -37,8 +50,9 @@ class ReferenceBook {
         if (remaining == 0) return 0;
         lob::OrderId id = next_id_++;
         auto& side_map = (side == lob::kBid) ? bids_ : asks_;
-        side_map[price].push_back(Order{id, remaining, owner});
-        where_[id] = {side, price};
+        auto& queue = side_map[price];
+        queue.push_back(Order{id, remaining, owner});
+        where_[id] = Location{side, price, std::prev(queue.end())};
         return id;
     }
 
@@ -52,18 +66,12 @@ class ReferenceBook {
     bool cancel(lob::OrderId id) {
         auto it = where_.find(id);
         if (it == where_.end()) return false;
-        auto [side, price] = it->second;
-        auto& side_map = (side == lob::kBid) ? bids_ : asks_;
-        auto level = side_map.find(price);
+        const Location loc = it->second;
+        auto& side_map = (loc.side == lob::kBid) ? bids_ : asks_;
+        auto level = side_map.find(loc.price);
         if (level == side_map.end()) return false;
-        auto& queue = level->second;
-        for (auto q = queue.begin(); q != queue.end(); ++q) {
-            if (q->id == id) {
-                queue.erase(q);
-                break;
-            }
-        }
-        if (queue.empty()) side_map.erase(level);
+        level->second.erase(loc.pos);           // list iterators stay valid
+        if (level->second.empty()) side_map.erase(level);
         where_.erase(it);
         return true;
     }
@@ -90,9 +98,9 @@ class ReferenceBook {
     std::int64_t queue_ahead(lob::OrderId id) const {
         auto it = where_.find(id);
         if (it == where_.end()) return -1;
-        auto [side, price] = it->second;
-        const auto& side_map = (side == lob::kBid) ? bids_ : asks_;
-        auto level = side_map.find(price);
+        const Location& loc = it->second;
+        const auto& side_map = (loc.side == lob::kBid) ? bids_ : asks_;
+        auto level = side_map.find(loc.price);
         if (level == side_map.end()) return -1;
         std::int64_t ahead = 0;
         for (const Order& o : level->second) {
@@ -132,7 +140,7 @@ class ReferenceBook {
         return remaining;
     }
 
-    lob::Qty consume(std::map<lob::Tick, std::deque<Order>>& side_map, lob::Tick price,
+    lob::Qty consume(std::map<lob::Tick, std::list<Order>>& side_map, lob::Tick price,
                      lob::Qty remaining) {
         auto& queue = side_map[price];
         while (remaining > 0 && !queue.empty()) {
@@ -150,9 +158,9 @@ class ReferenceBook {
         return remaining;
     }
 
-    std::map<lob::Tick, std::deque<Order>> bids_;
-    std::map<lob::Tick, std::deque<Order>> asks_;
-    std::unordered_map<lob::OrderId, std::pair<lob::Side, lob::Tick>> where_;
+    std::map<lob::Tick, std::list<Order>> bids_;
+    std::map<lob::Tick, std::list<Order>> asks_;
+    std::unordered_map<lob::OrderId, Location> where_;
     lob::OrderId next_id_ = 1;
     std::int64_t cum_volume_ = 0;
     std::int64_t rejects_ = 0;

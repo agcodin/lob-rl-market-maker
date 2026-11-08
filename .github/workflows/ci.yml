@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cpp:
+    name: C++ engine (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: release
+            cmake_args: -DCMAKE_BUILD_TYPE=Release
+          - name: asan+ubsan
+            cmake_args: -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLOBRL_SANITIZE=ON
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        # LOBRL_NATIVE is off in CI: the runner's microarchitecture is not the
+        # one the published numbers were measured on, and -march=native would
+        # make the build non-reproducible across runner generations.
+        run: cmake -B build -S . ${{ matrix.cmake_args }} -DLOBRL_NATIVE=OFF
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          ASAN_OPTIONS: detect_leaks=1
+        run: ctest --test-dir build --output-on-failure
+
+  benchmark:
+    name: Benchmark smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build benchmark
+        run: |
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DLOBRL_NATIVE=OFF -DBUILD_TESTING=OFF
+          cmake --build build --target bench_latency -j
+
+      - name: Run benchmark
+        # A smoke test, not a measurement: CI runners are shared and their
+        # timings are not comparable to a quiet machine. This only proves the
+        # harness still builds, runs and produces finite numbers.
+        run: ./build/bench_latency --quick
+
+      - name: Check the benchmark produced usable output
+        run: |
+          ./build/bench_latency --quick --csv > bench.csv
+          cat bench.csv
+          python3 - <<'PY'
+          import csv, sys
+          rows = list(csv.DictReader(open("bench.csv")))
+          assert rows, "benchmark produced no rows"
+          for r in rows:
+              p50 = float(r["p50"])
+              assert p50 > 0, f"non-positive p50 for {r['operation']}/{r['impl']}"
+              assert p50 < 1e6, f"implausible p50 for {r['operation']}/{r['impl']}"
+          engine = {r["operation"]: float(r["p50"]) for r in rows if r["impl"] == "engine"}
+          naive = {r["operation"]: float(r["p50"]) for r in rows if r["impl"] == "std::map"}
+          for op in engine:
+              print(f"{op}: engine {engine[op]:.2f} ns vs std::map {naive[op]:.2f} ns")
+          print(f"OK: {len(rows)} rows")
+          PY
+
+  python:
+    name: Python bindings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        # Only the engine's own dependencies: the reinforcement-learning tests
+        # need torch and gymnasium and are not part of this gate.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pybind11 pytest
+          python -m pip install -e . --no-build-isolation
+
+      - name: Test the engine through its bindings
+        run: python -m pytest tests/test_engine.py -q

@@ -27,9 +27,27 @@ if(LOBRL_SANITIZE)
   add_link_options(-fsanitize=address,undefined)
 endif()
 
+# Shared by the benchmark and the tests: a naive reference book used both as a
+# baseline to measure against and as the other side of the differential fuzz test.
+add_library(lob_support INTERFACE)
+target_include_directories(lob_support INTERFACE ${CMAKE_SOURCE_DIR}/cpp/support)
+
+set(LOBRL_BENCH_FLAGS "-O3 -fno-omit-frame-pointer")
+if(LOBRL_NATIVE)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+    set(LOBRL_BENCH_FLAGS "${LOBRL_BENCH_FLAGS} -mcpu=native")
+  else()
+    set(LOBRL_BENCH_FLAGS "${LOBRL_BENCH_FLAGS} -march=native")
+  endif()
+endif()
+
 add_executable(bench_latency cpp/bench/bench_latency.cpp)
-target_link_libraries(bench_latency PRIVATE lob_core)
+target_link_libraries(bench_latency PRIVATE lob_core lob_support)
 target_compile_options(bench_latency PRIVATE -O3 -fno-omit-frame-pointer)
+# The benchmark prints the flags it was built with, so the numbers carry their
+# own provenance instead of relying on the README to describe them.
+target_compile_definitions(bench_latency PRIVATE
+  LOBRL_BUILD_FLAGS="${CMAKE_CXX_FLAGS_${CMAKE_BUILD_TYPE}} ${LOBRL_BENCH_FLAGS}")
 
 # The Python extension is normally built with `pip install -e .`; this target
 # exists so the same sources can be compiled from a pure-CMake tree.
@@ -51,7 +69,7 @@ if(BUILD_TESTING)
   FetchContent_MakeAvailable(Catch2)
 
   add_executable(lob_tests cpp/tests/test_book.cpp cpp/tests/test_invariants.cpp)
-  target_link_libraries(lob_tests PRIVATE lob_core Catch2::Catch2WithMain)
+  target_link_libraries(lob_tests PRIVATE lob_core lob_support Catch2::Catch2WithMain)
   # The arena is a few megabytes of members, so the book is heap-allocated in
   # the tests; keep frame sizes honest anyway.
   target_compile_options(lob_tests PRIVATE -Wall -Wextra -Wno-unused-parameter)
