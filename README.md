@@ -2,42 +2,54 @@
 
 [![CI](https://github.com/agcodin/lob-rl-market-maker/actions/workflows/ci.yml/badge.svg)](https://github.com/agcodin/lob-rl-market-maker/actions/workflows/ci.yml)
 
-A deterministic, zero-heap-allocation limit order book matching engine in C++20,
-bound to Python through `pybind11` over contiguous NumPy buffers, plus a PPO
-market maker trained against synthetic microstructure flow with an
-inventory-penalized Avellaneda–Stoikov reward, and a multi-agent league where
-several makers compete for the same order flow.
+A limit order book matching engine written in C++20 with no heap allocation on
+the hot path, bound to Python through `pybind11` over NumPy buffers that are
+written in place, and a reinforcement learning market maker trained against
+synthetic microstructure flow. Several makers can then compete for the same
+order flow in one shared book.
 
-**Headline numbers** — 3.9 to 5.9 ns per order-book operation at the median,
-between 3.7 and 16.5 times faster than a `std::map` book doing the same work
-depending on the operation, and a learned
-market maker that beats the closed-form Avellaneda–Stoikov quoter by 7.7x on
-risk-adjusted return while carrying a ninth of the inventory.
+**Headline numbers.** The engine runs an order-book operation in 3.9 to 5.9 ns
+at the median, between 3.7 and 16.5 times faster than a `std::map` book doing
+the same work. The learned market maker beats the closed-form
+Avellaneda–Stoikov quoter by 7.7x on risk-adjusted return while carrying a
+ninth of the inventory. Every number in this README comes from a run in it, and
+the sections below say what each was measured on.
+
+### Three commands
+
+```bash
+make install   # venv, dependencies, and the C++ extension built in place
+make test      # 36 C++ test cases (~1.4M assertions) and 50 Python tests
+make bench     # latency percentiles against a std::map reference book
+```
+
+![Architecture: the order book layout and the Python binding path](docs/img/architecture.svg)
 
 ```
 cpp/include/lob/      types.hpp  pool.hpp  ring.hpp  book.hpp   # header-only engine
 cpp/src/bindings.cpp                                            # pybind11 bridge
-cpp/bench/bench_latency.cpp                                     # tick-to-trade harness
+cpp/tests/            test_book.cpp  test_invariants.cpp        # unit + differential
+cpp/support/          reference_book.hpp                        # std::map oracle
+cpp/bench/            bench_latency.cpp                         # tick-to-trade harness
 python/lobrl/         flow.py env.py ppo.py baselines.py metrics.py train.py evaluate.py
-                      multi_env.py selfplay.py league.py          # multi-agent
+                      multi_env.py selfplay.py league.py arena.py gap.py   # multi-agent
 tests/                test_engine.py  test_env.py  test_multi.py
-docs/                 EXPERIMENT_LOG.md                          # the full record
+docs/                 EXPERIMENT_LOG.md                         # the full record
 scripts/              bench_python.py  profile_perf.sh  record_episode.py
                       record_league.py  build_dashboard.py  competition_sweep.py
+.github/workflows/    ci.yml
 ```
 
-## Quick start
+## Everything else you can run
 
 ```bash
-make install       # venv + deps + build the extension in place
-make test          # 50 Python tests (engine, environment, multi-agent, metrics)
-make bench         # C++ latency percentiles against a std::map baseline
-ctest --test-dir build  # 36 C++ test cases, ~1.4M assertions
-make bench-py      # bridge throughput + zero-copy verification
+make cpp-test-san  # the C++ suite under AddressSanitizer and UBSan
+make bench-py      # bridge throughput and zero-copy verification
 make train         # single-agent PPO, 1.2M steps (~5 min on a laptop CPU)
-make eval          # PPO vs fixed-spread and Avellaneda-Stoikov baselines
+make eval          # PPO against fixed-spread and Avellaneda-Stoikov baselines
 make sweep         # self-play at 1/2/4/8 makers, then the competition table
 make league        # every strategy in one shared order book
+make overnight     # unattended league training against a pool of past selves
 make dashboard     # rebuild the HTML dashboard from fresh runs
 ```
 
@@ -247,9 +259,9 @@ A-S formulation.
 - `ctest --test-dir build` — 36 C++ test cases and about 1.4M assertions:
   unit tests, plus property and differential tests against a naive reference
   book, all clean under ASan and UBSan. See **Testing** above.
-- `make test` — 50 Python tests: matching invariants (price-time priority, partial
-  fills, multi-level sweeps, stale-id safety, arena exhaustion, zero-copy event
-  view), environment invariants (determinism under seed, cash/inventory
+- `pytest tests` — 50 Python tests, also run by `make test`: matching
+  invariants (price-time priority, partial fills, multi-level sweeps, stale-id
+  safety, arena exhaustion, zero-copy event view), environment invariants (determinism under seed, cash/inventory
   consistency, quotes never crossing, inventory cap, flow stationarity, Hawkes
   over-dispersion), and multi-agent invariants (per-owner fill attribution,
   seat fairness, tighter quotes winning more fills, GAE across parallel agent

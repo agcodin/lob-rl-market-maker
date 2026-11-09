@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 700" width="980" height="700" font-family="ui-sans-serif, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+<style>
+  :root { color-scheme: light dark; }
+  .bg    { fill: #ffffff; }
+  .panel { fill: #f6f8fa; stroke: #d0d7de; }
+  .box   { fill: #ffffff; stroke: #57606a; }
+  .accent{ fill: #ddf4ff; stroke: #0969da; }
+  .warm  { fill: #fff8c5; stroke: #9a6700; }
+  .green { fill: #dafbe1; stroke: #1a7f37; }
+  .t     { fill: #1f2328; }
+  .dim   { fill: #656d76; }
+  .edge  { stroke: #57606a; fill: none; }
+  .eacc  { stroke: #0969da; fill: none; }
+  text   { font-size: 13px; }
+  .h     { font-size: 15px; font-weight: 600; }
+  .ttl   { font-size: 17px; font-weight: 700; }
+  .mono  { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  .sm    { font-size: 11px; }
+  @media (prefers-color-scheme: dark) {
+    .bg    { fill: #0d1117; }
+    .panel { fill: #161b22; stroke: #30363d; }
+    .box   { fill: #0d1117; stroke: #8b949e; }
+    .accent{ fill: #0c2d6b; stroke: #58a6ff; }
+    .warm  { fill: #4d3800; stroke: #e3b341; }
+    .green { fill: #0f5323; stroke: #3fb950; }
+    .t     { fill: #e6edf3; }
+    .dim   { fill: #9198a1; }
+    .edge  { stroke: #8b949e; }
+    .eacc  { stroke: #58a6ff; }
+  }
+</style>
+<defs>
+  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+  </marker>
+  <marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+  </marker>
+</defs>
+
+<rect class="bg" width="980" height="700"/>
+
+<!-- ============ Panel 1: book layout ============ -->
+<rect class="panel" x="16" y="16" width="948" height="384" rx="8"/>
+<text class="ttl t" x="36" y="46">Order book layout — no allocation on the hot path</text>
+<text class="dim" x="36" y="68">A price lookup is one indexed load. A queue walk is a hop along int32 indices inside one array.</text>
+
+<!-- direct-indexed price map -->
+<text class="h t" x="36" y="104">Direct-indexed price map</text>
+<text class="mono dim" x="36" y="122">Level ask_levels_[2^17], bid_levels_[2^17]</text>
+
+<rect class="box" x="36" y="136" width="124" height="34" rx="4"/>
+<text class="mono t" x="46" y="157">tick 10051</text>
+<rect class="accent" x="36" y="174" width="124" height="34" rx="4"/>
+<text class="mono t" x="46" y="195">tick 10050</text>
+<rect class="box" x="36" y="212" width="124" height="34" rx="4"/>
+<text class="mono t" x="46" y="233">tick 10049</text>
+<text class="dim sm" x="36" y="266">indexed straight by</text>
+<text class="dim sm" x="36" y="281">fixed-point tick price</text>
+<text class="dim sm" x="36" y="296">— no hash, no tree</text>
+
+<!-- level record -->
+<rect class="accent" x="196" y="150" width="190" height="112" rx="6"/>
+<text class="h t" x="208" y="172">Level</text>
+<text class="mono t" x="208" y="194">volume   1400</text>
+<text class="mono t" x="208" y="212">count       3</text>
+<text class="mono t" x="208" y="230">head       7   ─┐</text>
+<text class="mono t" x="208" y="248">tail      22   ─┘</text>
+<text class="dim sm" x="196" y="282">head/tail are arena</text>
+<text class="dim sm" x="196" y="297">indices, not pointers</text>
+
+<path class="eacc" d="M160 191 L196 200" marker-end="url(#arb)"/>
+<path class="eacc" d="M386 232 C 404 232, 408 170, 426 170" marker-end="url(#arb)"/>
+
+<!-- arena -->
+<text class="h t" x="426" y="104">Static object pool (one contiguous arena)</text>
+<text class="mono dim" x="426" y="122">StaticObjectPool&lt;Order, 2^18&gt;</text>
+
+<rect class="box" x="426" y="140" width="112" height="60" rx="4"/>
+<text class="mono t" x="436" y="159">slot 7</text>
+<text class="mono dim" x="436" y="176">qty 500</text>
+<text class="mono dim" x="436" y="192">next 14</text>
+
+<rect class="box" x="554" y="140" width="112" height="60" rx="4"/>
+<text class="mono t" x="564" y="159">slot 14</text>
+<text class="mono dim" x="564" y="176">qty 600</text>
+<text class="mono dim" x="564" y="192">next 22</text>
+
+<rect class="box" x="682" y="140" width="112" height="60" rx="4"/>
+<text class="mono t" x="692" y="159">slot 22</text>
+<text class="mono dim" x="692" y="176">qty 300</text>
+<text class="mono dim" x="692" y="192">next -1</text>
+
+<rect class="warm" x="810" y="140" width="128" height="60" rx="4"/>
+<text class="mono t" x="820" y="159">free stack</text>
+<text class="mono t" x="820" y="178">[31, 30, 29…]</text>
+<text class="dim sm" x="820" y="194">O(1) acquire/release</text>
+
+<path class="edge" d="M538 170 L554 170" marker-end="url(#ar)"/>
+<path class="edge" d="M666 170 L682 170" marker-end="url(#ar)"/>
+<text class="dim sm" x="426" y="220">intrusive FIFO queue: oldest order first, so price-time priority is the walk order</text>
+
+<!-- ids -->
+<rect class="green" x="426" y="240" width="368" height="62" rx="6"/>
+<text class="h t" x="438" y="261">Generation-tagged ids</text>
+<text class="mono t" x="438" y="281">order_id = (generation &lt;&lt; 20) | slot</text>
+<text class="dim sm" x="438" y="296">a recycled slot bumps its generation, so a stale id resolves to nothing</text>
+
+<rect class="box" x="810" y="240" width="128" height="62" rx="6"/>
+<text class="h t" x="822" y="261">Event ring</text>
+<text class="mono dim" x="822" y="280">EventRing&lt;2^14&gt;</text>
+<text class="dim sm" x="822" y="295">fills, cancels, rejects</text>
+
+<text class="dim sm" x="36" y="336">Exhaustion is reported as a reject and never grown around, which is what keeps the</text>
+<text class="dim sm" x="36" y="352">latency distribution bounded: there is no path from an order to the allocator.</text>
+<text class="mono dim" x="36" y="378">cpp/include/lob/ — types.hpp  pool.hpp  ring.hpp  book.hpp   (header-only)</text>
+
+<!-- ============ Panel 2: binding path ============ -->
+<rect class="panel" x="16" y="416" width="948" height="268" rx="8"/>
+<text class="ttl t" x="36" y="446">Python binding path — the buffers are the interface</text>
+<text class="dim" x="36" y="468">Nothing is serialized and nothing is copied per step. Both directions write into memory that already exists.</text>
+
+<rect class="accent" x="36" y="492" width="178" height="150" rx="6"/>
+<text class="h t" x="48" y="514">C++ OrderBook</text>
+<text class="mono dim" x="48" y="534">arena + price grid</text>
+<text class="mono dim" x="48" y="551">+ event ring</text>
+<text class="dim sm" x="48" y="578">single-threaded,</text>
+<text class="dim sm" x="48" y="593">fully snapshot-able</text>
+
+<rect class="box" x="276" y="492" width="200" height="68" rx="6"/>
+<text class="mono t" x="288" y="514">snapshot_into(...)</text>
+<text class="dim sm" x="288" y="533">writes top-K prices and</text>
+<text class="dim sm" x="288" y="548">volumes into your arrays</text>
+
+<rect class="box" x="276" y="574" width="200" height="68" rx="6"/>
+<text class="mono t" x="288" y="596">events_buffer()</text>
+<text class="dim sm" x="288" y="615">returns a view that aliases</text>
+<text class="dim sm" x="288" y="630">the ring; book is its base</text>
+
+<path class="eacc" d="M214 526 L276 526" marker-end="url(#arb)"/>
+<path class="eacc" d="M214 608 L276 608" marker-end="url(#arb)"/>
+
+<rect class="green" x="538" y="492" width="200" height="68" rx="6"/>
+<text class="h t" x="550" y="514">NumPy arrays</text>
+<text class="dim sm" x="550" y="533">allocated once, at env</text>
+<text class="dim sm" x="550" y="548">construction, reused forever</text>
+
+<rect class="green" x="538" y="574" width="200" height="68" rx="6"/>
+<text class="h t" x="550" y="596">Structured dtype view</text>
+<text class="dim sm" x="550" y="615">48-byte Event records,</text>
+<text class="dim sm" x="550" y="630">read with zero copies</text>
+
+<path class="edge" d="M476 526 L538 526" marker-end="url(#ar)"/>
+<path class="edge" d="M476 608 L538 608" marker-end="url(#ar)"/>
+
+<rect class="box" x="782" y="492" width="156" height="150" rx="6"/>
+<text class="h t" x="794" y="514">MarketMakingEnv</text>
+<text class="dim sm" x="794" y="534">gymnasium.Env</text>
+<text class="dim sm" x="794" y="556">step() re-quotes,</text>
+<text class="dim sm" x="794" y="571">advances the flow,</text>
+<text class="dim sm" x="794" y="586">replays new ring</text>
+<text class="dim sm" x="794" y="601">records into cash</text>
+<text class="dim sm" x="794" y="616">and inventory</text>
+
+<path class="edge" d="M738 526 L782 540" marker-end="url(#ar)"/>
+<path class="edge" d="M738 608 L782 594" marker-end="url(#ar)"/>
+</svg>
