@@ -9,7 +9,7 @@ synthetic microstructure flow. Several makers can then compete for the same
 order flow in one shared book.
 
 **Headline numbers.** The engine runs an order-book operation in 3.9 to 5.9 ns
-at the median, between 3.7 and 16.5 times faster than a `std::map` book doing
+at the median, between 3.3 and 17.4 times faster than a `std::map` book doing
 the same work. The learned market maker beats the closed-form
 Avellaneda–Stoikov quoter by 7.7x on risk-adjusted return while carrying a
 ninth of the inventory. Every number in this README comes from a run in it, and
@@ -89,10 +89,20 @@ iterations : 200000
 
 | operation | engine p50 | engine p99 | engine p99.9 | `std::map` p50 | speedup |
 |---|---|---|---|---|---|
-| limit add (rest) | **3.91** | 16.94 | 282.17 | 33.86 | 8.7x |
-| cancel | **5.20** | 22.12 | 29.30 | 85.94 | 16.5x |
-| aggressive cross (1 level) | **5.86** | 7.81 | 10.69 | 21.48 | 3.7x |
-| L2 snapshot (10 levels) | **5.86** | 8.45 | 11.06 | 75.52 | 12.9x |
+| limit add (rest) | **3.91** | 16.94 | 210.30 | 31.91 | 8.2x |
+| cancel | **4.56** | 24.09 | 45.58 | 79.42 | 17.4x |
+| aggressive cross (1 level) | **5.86** | 7.81 | 10.42 | 19.53 | 3.3x |
+| L2 snapshot (10 levels) | **5.86** | 7.81 | 11.72 | 78.78 | 13.4x |
+
+**Repeatability.** Across five consecutive runs the engine's four medians came
+back as 3.906, 4.562, 5.859 and 5.859 ns every single time, to the last digit,
+which is what a fixed instruction path with no allocator in it looks like. The
+`std::map` baseline is the half that moves: its cancel median ranged from 79 to
+168 ns over the same five runs, because that path depends on where the
+allocator happened to put the nodes. The run above is the one with the fastest
+baseline of the five, so the speedup column is the least flattering of the
+numbers measured, and the cancel figure is better read as roughly 17x to 37x
+depending on how the baseline's memory falls.
 
 Reproduce with `make bench`, or `./build/bench_latency 200000 --csv` for machine
 -readable output. The harness prints the machine, compiler and flags it was built
